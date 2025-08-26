@@ -8,7 +8,10 @@ COPY pyproject.toml uv.lock ./
 
 # Install uv and sync dependencies
 RUN pip install --no-cache-dir uv && \
-    uv sync --frozen --no-dev
+    uv sync --frozen && \
+    ls -la .venv/bin/ && \
+    .venv/bin/python --version && \
+    .venv/bin/pip list | grep fastmcp
 
 FROM python:3.11-slim
 
@@ -34,7 +37,8 @@ COPY .env.example ./
 
 # Create directories for outputs and logs
 RUN mkdir -p webhook_outputs logs data && \
-    chown -R crawler:crawler /app
+    chown -R crawler:crawler /app && \
+    chmod +x /app/.venv/bin/*
 
 # Copy supervisor configuration
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
