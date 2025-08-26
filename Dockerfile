@@ -8,10 +8,7 @@ COPY pyproject.toml uv.lock ./
 
 # Install uv and sync dependencies
 RUN pip install --no-cache-dir uv && \
-    uv sync --frozen && \
-    ls -la .venv/bin/ && \
-    .venv/bin/python --version && \
-    .venv/bin/pip list | grep fastmcp
+    uv sync --frozen
 
 FROM python:3.11-slim
 
