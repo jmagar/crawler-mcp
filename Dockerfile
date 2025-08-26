@@ -33,7 +33,7 @@ COPY scripts/ ./scripts/
 COPY .env.example ./
 
 # Create directories for outputs and logs
-RUN mkdir -p webhook_outputs logs data && \
+RUN mkdir -p webhook_outputs logs data data/.crawl4ai && \
     chown -R crawler:crawler /app && \
     chmod +x /app/.venv/bin/*
 
