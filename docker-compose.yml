@@ -81,7 +81,10 @@ services:
       - "${SERVER_PORT:-8010}:8010"      # MCP server
       - "${WEBHOOK_PORT:-38080}:38080"   # Webhook server
     volumes:
-      - ./data:/app
+      - ./data/scripts:/app/scripts
+      - ./data/webhook_outputs:/app/webhook_outputs
+      - ./data/logs:/app/logs
+      - ./data/data:/app/data
     env_file: .env
     environment:
       # Service-to-service URLs (must be here for Docker networking)
