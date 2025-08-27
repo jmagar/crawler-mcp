@@ -95,6 +95,9 @@ services:
       - CUDA_VISIBLE_DEVICES=0
       - PYTORCH_CUDA_ALLOC_CONF=max_split_size_mb:1024
       - CUDA_CACHE_DISABLE=0
+      # User and directory configuration
+      - HOME=/home/crawler
+      - USER=crawler
       # Crawl4AI data directory (must be writable by crawler user)
       - CRAWL4AI_DATA_DIR=/app/data/.crawl4ai
       - CRAWL4AI_USER_DATA_DIR=/app/data/.crawl4ai

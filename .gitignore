@@ -80,6 +80,11 @@ downloads/
 repositories/
 cloned_repos/
 
+# Data directory contents (but keep structure)
+data/logs/
+data/data/
+data/webhook_outputs/
+
 # Vector database
 qdrant_data/
 vector_storage/

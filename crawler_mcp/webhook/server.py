@@ -28,7 +28,10 @@ load_dotenv()
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.FileHandler("logs/webhook_server.log"), logging.StreamHandler()],
+    handlers=[
+        logging.FileHandler("/app/logs/webhook_server.log"),
+        logging.StreamHandler(),
+    ],
 )
 logger = logging.getLogger(__name__)
 

@@ -21,8 +21,8 @@ RUN apt-get update && apt-get install -y \
     supervisor \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN groupadd -r crawler && useradd -r -g crawler crawler
+# Create non-root user with home directory
+RUN groupadd -r crawler && useradd -r -g crawler -m -d /home/crawler crawler
 
 # Copy virtual environment from builder
 COPY --from=builder /app/.venv /app/.venv
@@ -33,15 +33,17 @@ COPY scripts/ ./scripts/
 COPY .env.example ./
 
 # Create directories for outputs and logs
-RUN mkdir -p webhook_outputs logs data data/.crawl4ai && \
-    chown -R crawler:crawler /app && \
-    chmod +x /app/.venv/bin/*
+RUN mkdir -p /app/webhook_outputs /app/logs /app/data /app/data/.crawl4ai && \
+    chown -R crawler:crawler /app /home/crawler && \
+    chmod +x /app/.venv/bin/* && \
+    chmod 755 /app/logs /app/data /app/webhook_outputs
 
 # Copy supervisor configuration
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 
 # Set PATH to include virtual environment
 ENV PATH="/app/.venv/bin:$PATH"
+ENV HOME="/home/crawler"
 
 # Switch to non-root user
 USER crawler
@@ -54,5 +56,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
     CMD curl -f http://localhost:8010/health && curl -f http://localhost:38080/health || exit 1
 
 # Run supervisor to manage both services
-USER root
 CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
