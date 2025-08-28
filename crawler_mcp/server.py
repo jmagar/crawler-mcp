@@ -126,14 +126,18 @@ logger.info("Registered all FastMCP tools")
 
 
 @mcp.tool
-async def health_check(ctx: Context) -> dict[str, Any]:
+async def health_check(ctx: Context, detailed: bool = False) -> dict[str, Any]:
     """
-    Perform a comprehensive health check of all services.
+    Perform a health check of all services.
+
+    Args:
+        detailed: If True, includes comprehensive statistics. If False, returns lightweight status only.
 
     Returns:
         Dictionary with health status of all components
     """
-    await ctx.info("Performing health check of all services")
+    check_type = "detailed" if detailed else "lightweight"
+    await ctx.info(f"Performing {check_type} health check of all services")
 
     try:
         health_results: dict[str, Any] = {
@@ -158,14 +162,18 @@ async def health_check(ctx: Context) -> dict[str, Any]:
         try:
             async with EmbeddingService() as embedding_service:
                 embedding_healthy = await embedding_service.health_check()
-                model_info = await embedding_service.get_model_info()
 
-                services["embedding"] = {
+                embedding_info = {
                     "status": "healthy" if embedding_healthy else "unhealthy",
                     "url": settings.tei_url,
                     "model": settings.tei_model,
-                    "model_info": model_info,
                 }
+
+                if detailed:
+                    model_info = await embedding_service.get_model_info(max_size=2000)
+                    embedding_info["model_info"] = model_info
+
+                services["embedding"] = embedding_info
         except Exception as e:
             services["embedding"] = {
                 "status": "error",
@@ -176,14 +184,18 @@ async def health_check(ctx: Context) -> dict[str, Any]:
         try:
             async with VectorService() as vector_service:
                 vector_healthy = await vector_service.health_check()
-                collection_info = await vector_service.get_collection_info()
 
-                services["vector"] = {
+                vector_info = {
                     "status": "healthy" if vector_healthy else "unhealthy",
                     "url": settings.qdrant_url,
                     "collection": settings.qdrant_collection,
-                    "collection_info": collection_info,
                 }
+
+                if detailed:
+                    collection_info = await vector_service.get_collection_info()
+                    vector_info["collection_info"] = collection_info
+
+                services["vector"] = vector_info
         except Exception as e:
             services["vector"] = {"status": "error", "error": str(e)}
 
@@ -191,13 +203,17 @@ async def health_check(ctx: Context) -> dict[str, Any]:
         try:
             async with RagService() as rag_service:
                 rag_health = await rag_service.health_check()
-                rag_stats = await rag_service.get_stats()
 
-                services["rag"] = {
+                rag_info = {
                     "status": "healthy" if all(rag_health.values()) else "unhealthy",
                     "component_health": rag_health,
-                    "stats": rag_stats,
                 }
+
+                if detailed:
+                    rag_stats = await rag_service.get_stats()
+                    rag_info["stats"] = rag_stats
+
+                services["rag"] = rag_info
         except Exception as e:
             services["rag"] = {"status": "error", "error": str(e)}
 
@@ -208,9 +224,10 @@ async def health_check(ctx: Context) -> dict[str, Any]:
 
         all_healthy = all(service_statuses)
         health_results["overall_status"] = "healthy" if all_healthy else "degraded"
+        health_results["check_mode"] = check_type
 
         await ctx.info(
-            f"Health check completed - Overall status: {health_results['overall_status']}"
+            f"{check_type.title()} health check completed - Overall status: {health_results['overall_status']}"
         )
 
         return health_results

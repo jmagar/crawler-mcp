@@ -296,7 +296,7 @@ class CrawlerMCPSettings(BaseSettings):
 
     # Alternative crawling approach settings
     use_arun_many_for_sitemaps: bool = Field(
-        default=False,
+        default=True,  # Enable by default for comprehensive sitemap crawling
         alias="USE_ARUN_MANY_FOR_SITEMAPS",
         description="Use arun_many() with sitemap URLs instead of BFSDeepCrawlStrategy",
     )

@@ -183,8 +183,8 @@ def register_rag_tools(mcp: FastMCP) -> None:
                     offset=offset,
                 )
 
-                # Get vector database statistics
-                vector_stats = await vector_service.get_sources_stats()
+                # Get vector database statistics (lightweight to reduce token usage)
+                vector_stats = await vector_service.get_sources_stats(lightweight=True)
 
             # Prepare response with simplified source data
             result: dict[str, Any] = {
@@ -273,7 +273,7 @@ def register_rag_tools(mcp: FastMCP) -> None:
                 stats = await rag_service.get_stats()
 
             async with VectorService() as vector_service:
-                vector_stats = await vector_service.get_sources_stats()
+                vector_stats = await vector_service.get_sources_stats(lightweight=True)
 
             # Combine statistics with simplified source management
             result: dict[str, Any] = {

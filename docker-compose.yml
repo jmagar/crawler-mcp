@@ -98,6 +98,8 @@ services:
       # User and directory configuration
       - HOME=/home/crawler
       - USER=crawler
+      # Playwright browser path (essential for crawl tool)
+      - PLAYWRIGHT_BROWSERS_PATH=/home/crawler/.cache/ms-playwright
       # Crawl4AI data directory (must be writable by crawler user)
       - CRAWL4AI_DATA_DIR=/app/data/.crawl4ai
       - CRAWL4AI_USER_DATA_DIR=/app/data/.crawl4ai

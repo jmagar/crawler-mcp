@@ -100,9 +100,11 @@ class VectorService(BaseVectorService):
             query_vector, limit, score_threshold, source_filter, date_range
         )
 
-    async def get_sources_stats(self) -> dict[str, Any]:
+    async def get_sources_stats(
+        self, lightweight: bool = True, max_sources: int = 20
+    ) -> dict[str, Any]:
         """Get statistics about sources in the vector database."""
-        return await self.statistics.get_sources_stats()
+        return await self.statistics.get_sources_stats(lightweight, max_sources)
 
     async def get_unique_sources(
         self,

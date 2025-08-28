@@ -842,12 +842,10 @@ class RagService:
         """
         await self._ensure_open()
         try:
-            health = await self.health_check()
             collection_info = await self.vector_service.get_collection_info()
-            source_stats = await self.vector_service.get_sources_stats()
+            source_stats = await self.vector_service.get_sources_stats(lightweight=True)
 
             return {
-                "health": health,
                 "collection": collection_info,
                 "sources": source_stats,
                 "cache": self.query_cache.get_stats(),

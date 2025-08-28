@@ -81,15 +81,40 @@ class EmbeddingService:
             logger.error(f"TEI health check failed: {e}")
             return False
 
-    async def get_model_info(self) -> dict[str, Any]:
+    async def get_model_info(self, max_size: int = 1000) -> dict[str, Any]:
         """
         Get information about the loaded model.
+
+        Args:
+            max_size: Maximum size of model info string representation. If exceeded, response is truncated.
         """
         try:
             await self._ensure_client_open()
             response = await self.client.get(f"{self.base_url}/info")
             if response.status_code == 200:
                 result: dict[str, Any] = response.json()
+
+                # Check if result is too large when serialized
+                import json
+
+                result_str = json.dumps(result, default=str)
+                if len(result_str) > max_size:
+                    # Truncate the result and add a note
+                    truncated_result = {
+                        "model_id": result.get("model_id", "unknown"),
+                        "model_dtype": result.get("model_dtype", "unknown"),
+                        "model_device_type": result.get("model_device_type", "unknown"),
+                        "max_client_batch_size": result.get(
+                            "max_client_batch_size", "unknown"
+                        ),
+                        "max_batch_tokens": result.get("max_batch_tokens", "unknown"),
+                        "_truncated": f"Response truncated - original size: {len(result_str)} chars, limit: {max_size} chars",
+                        "_keys_available": list(result.keys())
+                        if isinstance(result, dict)
+                        else "non-dict response",
+                    }
+                    return truncated_result
+
                 return result
             else:
                 logger.warning(f"Failed to get model info: {response.status_code}")

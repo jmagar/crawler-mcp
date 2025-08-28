@@ -27,9 +27,15 @@ class StatisticsCollector(BaseVectorService):
         """
         super().__init__(client)
 
-    async def get_sources_stats(self) -> dict[str, Any]:
+    async def get_sources_stats(
+        self, lightweight: bool = True, max_sources: int = 20
+    ) -> dict[str, Any]:
         """
         Get statistics about sources in the vector database.
+
+        Args:
+            lightweight: If True, returns only summary statistics without detailed source counts
+            max_sources: Maximum number of top sources to include in detailed stats
 
         Returns:
             Dictionary with source statistics
@@ -41,7 +47,23 @@ class StatisticsCollector(BaseVectorService):
         await collection_manager.ensure_collection_exists()
 
         try:
-            # Scroll through all points to collect statistics
+            # Get collection info for basic stats
+            client = await self._get_client()
+            collection_info = await client.get_collection(self.collection_name)
+            total_points = collection_info.points_count or 0
+
+            if lightweight:
+                # Return lightweight stats without full scan
+                return {
+                    "total_documents": total_points,
+                    "unique_sources": "unknown (lightweight mode)",
+                    "source_counts": "use detailed mode for source breakdown",
+                    "total_content_length": "unknown (lightweight mode)",
+                    "average_chunk_size": "unknown (lightweight mode)",
+                    "mode": "lightweight",
+                }
+
+            # Full scan for detailed statistics
             stats: dict[str, Any] = {
                 "total_documents": 0,
                 "unique_sources": set(),
@@ -54,7 +76,6 @@ class StatisticsCollector(BaseVectorService):
             limit = 1000
 
             while True:
-                client = await self._get_client()
                 result = await client.scroll(
                     collection_name=self.collection_name,
                     limit=limit,
@@ -93,8 +114,22 @@ class StatisticsCollector(BaseVectorService):
                     stats["total_content_length"] / stats["total_documents"]
                 )
 
+            # Limit source counts to top N sources
+            if len(stats["source_counts"]) > max_sources:
+                total_sources = len(stats["source_counts"])
+                top_sources = dict(
+                    sorted(
+                        stats["source_counts"].items(), key=lambda x: x[1], reverse=True
+                    )[:max_sources]
+                )
+                top_sources["...and_more"] = (
+                    f"{total_sources - max_sources} more sources"
+                )
+                stats["source_counts"] = top_sources
+
             # Convert set to count
             stats["unique_sources"] = len(stats["unique_sources"])
+            stats["mode"] = "detailed"
 
             return stats
 
@@ -347,8 +382,8 @@ class StatisticsCollector(BaseVectorService):
             Dictionary with distribution analysis
         """
         try:
-            # Get basic stats
-            stats = await self.get_sources_stats()
+            # Get basic stats (lightweight mode for better performance)
+            stats = await self.get_sources_stats(lightweight=True)
 
             # Additional analysis could be added here
             # For now, return basic distribution info
