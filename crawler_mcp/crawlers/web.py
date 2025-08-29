@@ -3,10 +3,7 @@ Optimized web crawling strategy with streaming and caching support.
 """
 
 import contextlib
-import logging
-import os
 import re
-import sys
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -24,13 +21,14 @@ from crawl4ai.content_filter_strategy import PruningContentFilter  # type: ignor
 from crawl4ai.deep_crawling import (  # type: ignore
     BFSDeepCrawlStrategy,
 )
-from crawl4ai.deep_crawling.filters import URLPatternFilter  # type: ignore
 from crawl4ai.extraction_strategy import (  # type: ignore
     CosineStrategy,
     LLMExtractionStrategy,
 )
 
 from ..config import settings
+from ..core.logging import get_logger
+from ..core.utils import suppress_stdout
 from ..models.crawl import (
     CrawlRequest,
     CrawlResult,
@@ -41,20 +39,7 @@ from ..models.crawl import (
 from ..types.crawl4ai_types import DefaultMarkdownGeneratorImpl
 from .base import BaseCrawlStrategy
 
-logger = logging.getLogger(__name__)
-
-
-@contextlib.contextmanager
-def suppress_stdout() -> Any:
-    """Context manager to suppress stdout output (redirect to devnull)."""
-    old_stdout = sys.stdout
-    try:
-        # Redirect stdout to devnull to prevent interference with MCP protocol
-        with open(os.devnull, "w") as devnull:
-            sys.stdout = devnull
-            yield
-    finally:
-        sys.stdout = old_stdout
+logger = get_logger(__name__)
 
 
 class WebCrawlStrategy(BaseCrawlStrategy):
@@ -349,10 +334,12 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         )
 
         try:
-            # Check if the private _markdown field contains an integer hash
-            if hasattr(result, "_markdown") and isinstance(result._markdown, int):
+            # Check if the private _markdown field contains a numeric hash (int or float)
+            if hasattr(result, "_markdown") and isinstance(
+                result._markdown, int | float
+            ):
                 logger.debug(
-                    "Found integer _markdown (%s), replacing with empty MarkdownGenerationResult",
+                    "Found numeric _markdown (%s), replacing with empty MarkdownGenerationResult",
                     result._markdown,
                 )
                 # Replace the integer hash with an empty MarkdownGenerationResult
@@ -371,7 +358,9 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     # Try to access it to see if it would error
                     _ = result.markdown
                 except AttributeError as e:
-                    if "'int' object has no attribute" in str(e):
+                    if "'int' object has no attribute" in str(
+                        e
+                    ) or "'float' object has no attribute" in str(e):
                         logger.debug(
                             "Markdown property access failed, force setting safe value for %s",
                             result.url,
@@ -405,59 +394,61 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         However, crawl4ai sometimes returns integer hash IDs instead of proper objects,
         so we need to handle that case as well.
         """
-        if not result.markdown:
+        try:
+            # First try to access the markdown property safely
+            markdown_obj = result.markdown
+        except AttributeError as e:
+            if "'float' object has no attribute" in str(
+                e
+            ) or "'int' object has no attribute" in str(e):
+                self.logger.debug(
+                    "CRAWL DEBUG - result.markdown access failed with %s, returning empty",
+                    e,
+                )
+                return ""
+            raise
+
+        if not markdown_obj:
             return ""
 
         try:
-            # Check if result.markdown is an integer (hash ID issue)
-            if isinstance(result.markdown, int):
+            # Check if result.markdown is numeric (hash ID issue)
+            if isinstance(markdown_obj, int | float):
                 self.logger.debug(
-                    "CRAWL DEBUG - result.markdown is integer %s, returning empty",
-                    result.markdown,
+                    "CRAWL DEBUG - result.markdown is numeric %s, returning empty",
+                    markdown_obj,
                 )
                 return ""
 
             # Choose between fit_markdown and raw_markdown based on preference
             if prefer_fit_markdown:
                 # First try fit_markdown (filtered content) if available
-                if (
-                    hasattr(result.markdown, "fit_markdown")
-                    and result.markdown.fit_markdown
-                ):
-                    content = result.markdown.fit_markdown
+                if hasattr(markdown_obj, "fit_markdown") and markdown_obj.fit_markdown:
+                    content = markdown_obj.fit_markdown
                     if (
                         isinstance(content, str) and len(content) > 16
                     ):  # Avoid hash placeholders
                         return content
 
                 # Fall back to raw_markdown (full content)
-                if (
-                    hasattr(result.markdown, "raw_markdown")
-                    and result.markdown.raw_markdown
-                ):
-                    content = result.markdown.raw_markdown
+                if hasattr(markdown_obj, "raw_markdown") and markdown_obj.raw_markdown:
+                    content = markdown_obj.raw_markdown
                     if (
                         isinstance(content, str) and len(content) > 16
                     ):  # Avoid hash placeholders
                         return content
             else:
                 # Prefer raw_markdown first if prefer_fit_markdown is False
-                if (
-                    hasattr(result.markdown, "raw_markdown")
-                    and result.markdown.raw_markdown
-                ):
-                    content = result.markdown.raw_markdown
+                if hasattr(markdown_obj, "raw_markdown") and markdown_obj.raw_markdown:
+                    content = markdown_obj.raw_markdown
                     if (
                         isinstance(content, str) and len(content) > 16
                     ):  # Avoid hash placeholders
                         return content
 
                 # Fall back to fit_markdown
-                if (
-                    hasattr(result.markdown, "fit_markdown")
-                    and result.markdown.fit_markdown
-                ):
-                    content = result.markdown.fit_markdown
+                if hasattr(markdown_obj, "fit_markdown") and markdown_obj.fit_markdown:
+                    content = markdown_obj.fit_markdown
                     if (
                         isinstance(content, str) and len(content) > 16
                     ):  # Avoid hash placeholders
@@ -702,11 +693,11 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         )
 
         # Base run config with fit markdown optimization and CSS filtering
-        # NOTE: Deep crawl requires streaming mode (stream=True) to work properly
-        # The BFS strategy expects an async generator, not a list
+        # NOTE: Streaming mode with deep crawl causes hash placeholder bug in Crawl4AI 0.7.2+
+        # Disabling streaming to avoid float object has no attribute 'raw_markdown' error
         stream_enabled = (
-            deep_strategy is not None
-        )  # Enable streaming only if deep crawl is used
+            False  # Disable streaming to prevent hash placeholder corruption
+        )
         # Build minimal configuration that actually works with BFS deep crawling
         # Complex filtering parameters interfere with BFS link discovery and following
         if deep_strategy is not None:
@@ -851,9 +842,9 @@ class WebCrawlStrategy(BaseCrawlStrategy):
     def _build_deep_crawl_strategy(
         self, request: CrawlRequest, sitemap_seeds: list[str]
     ) -> BFSDeepCrawlStrategy | None:
-        """Construct a Best-First deep crawl strategy with filters and scoring; fallback to BFS."""
+        """Create a simplified BFS deep crawl strategy with essential parameters only."""
 
-        # Fix depth calculation - use settings default instead of hardcoded 1
+        # Get crawl limits from request or settings defaults
         max_depth = (
             request.max_depth
             if request.max_depth is not None
@@ -865,119 +856,23 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             else getattr(settings, "crawl_max_pages", 100)
         )
 
-        # Build filter chain from include/exclude patterns
-        include_patterns = request.include_patterns or []
-        exclude_patterns = (request.exclude_patterns or []) + getattr(
-            settings, "crawl_exclude_url_patterns", []
+        self.logger.info(
+            "Creating BFS deep crawl strategy: max_depth=%s, max_pages=%s",
+            max_depth,
+            max_pages,
         )
 
-        # filter_chain = None  # Would be used if filter chain was implemented
         try:
-            filters: list[Any] = []
-            if include_patterns:
-                # Some versions of URLPatternFilter may not support modes; wrap in try/except
-                try:
-                    filters.append(
-                        URLPatternFilter(
-                            patterns=list(include_patterns), mode="include"
-                        )
-                    )  # type: ignore[attr-defined]
-                except Exception:
-                    filters.append(URLPatternFilter(patterns=list(include_patterns)))  # type: ignore[attr-defined]
-            if exclude_patterns:
-                try:
-                    filters.append(
-                        URLPatternFilter(
-                            patterns=list(exclude_patterns), mode="exclude"
-                        )
-                    )  # type: ignore[attr-defined]
-                except Exception:
-                    filters.append(URLPatternFilter(patterns=list(exclude_patterns)))  # type: ignore[attr-defined]
-            if filters:
-                # filter_chain = FilterChain(filters)  # type: ignore[attr-defined]
-                pass  # Would create filter chain here if using it
-        except Exception:
-            pass  # filter_chain will remain None
-
-        # Scorer: prioritize includes, sitemap-derived keywords, and content-like URLs
-        try:
-            keywords: list[str] = []
-            for pat in include_patterns:
-                keywords.extend(
-                    [
-                        t
-                        for t in str(pat).replace("*", " ").replace("/", " ").split()
-                        if len(t) > 2
-                    ]
-                )
-            # Add tokens from ALL discovered sitemap URLs for better keyword scoring
-            # Don't limit by max_pages here - we want comprehensive keywords
-            for u in sitemap_seeds:
-                try:
-                    path = urlparse(u).path
-                    keywords.extend(
-                        [
-                            t
-                            for t in path.replace("-", " ")
-                            .replace("_", " ")
-                            .replace("/", " ")
-                            .split()
-                            if len(t) > 2
-                        ]
-                    )
-                except Exception:
-                    continue
-            if not keywords:
-                keywords = ["docs", "blog", "guide", "article", "learn", "help", "faq"]
-
-            # Add more generic keywords to be less restrictive
-            keywords.extend(
-                [
-                    "fastmcp",
-                    "mcp",
-                    "client",
-                    "server",
-                    "api",
-                    "tutorial",
-                    "example",
-                    "getting",
-                    "started",
-                ]
-            )
-            self.logger.info("Using keywords for scoring: %s...", keywords[:10])
-            # If supported by your crawl4ai version:
-            # deep_kwargs = {"scorer": KeywordRelevanceScorer(keywords=keywords, weight=0.7)}
-            # Would create scorer kwargs here if using them
-        except Exception as e:
-            self.logger.warning("Failed to create scorer: %s", e)
-            # deep_kwargs will remain empty
-
-        # Use simplified BFS strategy that actually works (based on successful basic test)
-        try:
-            self.logger.info(
-                "Creating simplified BFS deep crawl strategy: max_depth=%s, max_pages=%s",
-                max_depth,
-                max_pages,
-            )
-            # Simplified approach - internal links only, no complex filtering
+            # Create simplified BFS strategy with only proven-working parameters
+            # This matches the configuration that works reliably in testing
             return BFSDeepCrawlStrategy(  # type: ignore[attr-defined]
                 max_depth=max_depth,
-                include_external=False,  # Only internal links (matches working basic test)
+                include_external=False,  # Only internal links for focused crawling
                 max_pages=max_pages,
-                # Remove complex filtering that may interfere with BFS functionality
             )
         except Exception as e:
-            self.logger.warning("Failed to create BFS strategy: %s", e)
-            # Last resort: minimal BFS parameters (same as working basic test)
-            try:
-                return BFSDeepCrawlStrategy(  # type: ignore[attr-defined]
-                    max_depth=max_depth,
-                    include_external=False,
-                    max_pages=max_pages,
-                )
-            except Exception as e2:
-                self.logger.error("Failed to create minimal BFS strategy: %s", e2)
-                return None
+            self.logger.error("Failed to create BFS deep crawl strategy: %s", e)
+            return None
 
     async def _discover_sitemap_seeds(self, start_url: str, limit: int) -> list[str]:
         """Fetch robots.txt and sitemap.xml to build seed URLs for prioritization.
@@ -1127,22 +1022,37 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     run_config.deep_crawl_strategy is not None,
                 )
 
-                # Direct async iteration over results from browser.arun() with deep crawl strategy
-                # When stream=True and deep_crawl_strategy is set, arun returns an async generator
-                self.logger.info(
-                    "Processing streaming results from BFSDeepCrawlStrategy - starting iteration"
-                )
-                self.logger.info(f"DEBUG: crawl_result type: {type(crawl_result)}")
+                # Handle both streaming and non-streaming results from BFSDeepCrawlStrategy
+                self.logger.info(f"Processing BFS results - type: {type(crawl_result)}")
                 self.logger.info(
                     f"DEBUG: crawl_result has __aiter__: {hasattr(crawl_result, '__aiter__')}"
                 )
-                generator_count = 0
-                try:
-                    async for result in crawl_result:
-                        generator_count += 1
 
+                generator_count = 0
+                results_to_process = []
+
+                try:
+                    # Check if we have streaming results (async generator)
+                    if hasattr(crawl_result, "__aiter__"):
                         self.logger.info(
-                            f"AsyncGenerator yielded result #{generator_count}: {result.url if hasattr(result, 'url') else type(result).__name__}"
+                            "Processing streaming results (async generator)"
+                        )
+                        async for result in crawl_result:
+                            results_to_process.append(result)
+                            generator_count += 1
+                    else:
+                        # Non-streaming mode - handle direct results
+                        self.logger.info("Processing non-streaming results")
+                        if isinstance(crawl_result, list):
+                            results_to_process = crawl_result
+                        else:
+                            results_to_process = [crawl_result]
+                        generator_count = len(results_to_process)
+
+                    # Process all collected results
+                    for idx, result in enumerate(results_to_process, 1):
+                        self.logger.info(
+                            f"Processing result #{idx}/{len(results_to_process)}: {result.url if hasattr(result, 'url') else type(result).__name__}"
                         )
 
                         # Pre-check for unexpected types (defensive programming)
@@ -1188,7 +1098,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                             break
 
                     self.logger.info(
-                        f"Deep crawl iteration completed: yielded {generator_count} results, {len(successful_results)} successful"
+                        f"Deep crawl processing completed: processed {len(results_to_process)} results, {len(successful_results)} successful"
                     )
                 except Exception as async_error:
                     self.logger.error(

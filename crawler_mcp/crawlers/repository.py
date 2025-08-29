@@ -3,7 +3,6 @@ Repository crawling strategy with git cloning and adaptive batch processing.
 """
 
 import asyncio
-import logging
 import os
 import shutil
 import tempfile
@@ -13,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from ..core.logging import get_logger
 from ..models.crawl import (
     CrawlResult,
     CrawlStatistics,
@@ -21,7 +21,7 @@ from ..models.crawl import (
 from .base import BaseCrawlStrategy
 from .directory import DirectoryCrawlStrategy, DirectoryRequest
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RepositoryRequest:
@@ -102,7 +102,6 @@ class RepositoryCrawlStrategy(BaseCrawlStrategy):
         """Execute repository crawling with cloning and processing."""
         await self._initialize_managers()
 
-        # start_time = time.time()  # Not used currently
         self.logger.info(f"Starting repository crawl: {request.repo_url}")
 
         await self.pre_execute_setup()

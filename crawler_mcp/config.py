@@ -153,14 +153,6 @@ class CrawlerMCPSettings(BaseSettings):
             raise ValueError("browser_pool_size must be between 1 and 20")
         return v
 
-    @field_validator("browser_type")
-    @classmethod
-    def validate_browser_type(cls, v: str) -> str:
-        allowed_types = {"chromium", "firefox", "webkit"}
-        if v.lower() not in allowed_types:
-            raise ValueError(f"browser_type must be one of {allowed_types}")
-        return v.lower()
-
     @field_validator("browser_extra_args")
     @classmethod
     def validate_browser_extra_args(cls, v: list[str]) -> list[str]:
@@ -257,9 +249,6 @@ class CrawlerMCPSettings(BaseSettings):
     crawl_enable_caching: bool = Field(default=True, alias="CRAWL_ENABLE_CACHING")
 
     # Browser Configuration
-    browser_headless: bool = Field(default=True, alias="BROWSER_HEADLESS")
-    browser_type: str = Field(default="chromium", alias="BROWSER_TYPE")
-    browser_verbose: bool = Field(default=False, alias="BROWSER_VERBOSE")
     browser_extra_args: list[str] = Field(
         default_factory=list, alias="BROWSER_EXTRA_ARGS"
     )

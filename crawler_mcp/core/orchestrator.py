@@ -3,10 +3,6 @@ Slim crawl orchestrator that delegates to specialized managers and strategies.
 Replaces the massive crawler_service.py with a clean, maintainable architecture.
 """
 
-import contextlib
-import logging
-import os
-import sys
 import time
 from collections.abc import Callable
 from datetime import datetime
@@ -27,25 +23,15 @@ from ..models.crawl import (
     CrawlStatus,
     PageContent,
 )
+from .logging import get_logger
 from .memory import MemoryManager, cleanup_memory_manager, get_memory_manager
+from .mixins import AsyncServiceBase
+from .utils import suppress_stdout
 
-logger = logging.getLogger(__name__)
-
-
-@contextlib.contextmanager
-def suppress_stdout() -> Any:
-    """Context manager to suppress stdout output (redirect to devnull)."""
-    old_stdout = sys.stdout
-    try:
-        # Redirect stdout to devnull to prevent interference with MCP protocol
-        with open(os.devnull, "w") as devnull:
-            sys.stdout = devnull
-            yield
-    finally:
-        sys.stdout = old_stdout
+logger = get_logger(__name__)
 
 
-class CrawlerService:
+class CrawlerService(AsyncServiceBase):
     """
     Optimized crawler orchestrator with modular architecture.
 
@@ -57,7 +43,7 @@ class CrawlerService:
     """
 
     def __init__(self) -> None:
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        super().__init__()
 
         # Managers (initialized lazily)
         self._memory_manager: MemoryManager | None = None
@@ -70,11 +56,8 @@ class CrawlerService:
         # State
         self._initialized = False
 
-    async def _ensure_initialized(self) -> None:
-        """Ensure all managers are initialized."""
-        if self._initialized:
-            return
-
+    async def _initialize(self) -> None:
+        """Service-specific initialization."""
         self.logger.info("Initializing crawler service with optimized components")
 
         # Initialize managers
@@ -85,8 +68,6 @@ class CrawlerService:
             f"Memory threshold: {settings.crawl_memory_threshold}%, "
             f"Direct AsyncWebCrawler usage enabled"
         )
-
-        self._initialized = True
 
     async def crawl_website(
         self,
@@ -103,7 +84,7 @@ class CrawlerService:
         Returns:
             CrawlResult with crawled pages and statistics
         """
-        await self._ensure_initialized()
+        await self.initialize()
 
         self.logger.info(f"Starting website crawl: {request.url}")
 
@@ -140,7 +121,7 @@ class CrawlerService:
         Returns:
             CrawlResult with processed files and statistics
         """
-        await self._ensure_initialized()
+        await self.initialize()
 
         self.logger.info(f"Starting directory crawl: {directory_path}")
 
@@ -184,7 +165,7 @@ class CrawlerService:
         Returns:
             CrawlResult with analyzed repository files and statistics
         """
-        await self._ensure_initialized()
+        await self.initialize()
 
         self.logger.info(f"Starting repository crawl: {repo_url}")
 
@@ -232,7 +213,7 @@ class CrawlerService:
         Returns:
             PageContent for the scraped page
         """
-        await self._ensure_initialized()
+        await self.initialize()
 
         self.logger.debug(f"Scraping single page: {url}")
 
@@ -456,7 +437,7 @@ class CrawlerService:
 
     async def get_health_status(self) -> dict[str, Any]:
         """Get health status of all crawler components."""
-        await self._ensure_initialized()
+        await self.initialize()
 
         health_status: dict[str, Any] = {
             "crawler_service": "healthy",
@@ -480,22 +461,12 @@ class CrawlerService:
 
         return health_status
 
-    async def cleanup(self) -> None:
-        """Cleanup all crawler resources."""
+    async def _cleanup(self) -> None:
+        """Service-specific cleanup."""
         self.logger.info("Cleaning up crawler service")
 
         # Cleanup memory manager
         if self._memory_manager:
             cleanup_memory_manager()
 
-        self._initialized = False
         self.logger.info("Crawler service cleanup completed")
-
-    async def __aenter__(self) -> "CrawlerService":
-        """Async context manager entry."""
-        await self._ensure_initialized()
-        return self
-
-    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
-        """Async context manager exit."""
-        await self.cleanup()

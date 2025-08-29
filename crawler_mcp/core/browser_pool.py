@@ -121,11 +121,11 @@ class HighPerformanceBrowserPool:
                 # Deduplicate arguments (keeping last occurrence)
                 browser_args = _deduplicate_args(browser_args)
 
-                # Configuration-based browser setup
+                # Configuration-based browser setup - use consistent crawl settings
                 browser_config = BrowserConfig(
-                    headless=settings.browser_headless,
-                    browser_type=settings.browser_type,
-                    verbose=settings.browser_verbose,
+                    headless=settings.crawl_headless,
+                    browser_type=settings.crawl_browser,
+                    verbose=False,  # Disable verbose output for production stability
                     extra_args=browser_args,
                 )
 

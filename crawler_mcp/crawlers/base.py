@@ -1,17 +1,17 @@
 from __future__ import annotations
 
-import logging
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from ..core.memory import MemoryManager
+from ..core.logging import get_class_logger, get_logger
 from ..models.crawl import CrawlResult
 
 """Base crawling strategy with common functionality."""
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class BaseCrawlStrategy(ABC):
@@ -21,7 +21,7 @@ class BaseCrawlStrategy(ABC):
     """
 
     def __init__(self) -> None:
-        self.logger = logging.getLogger(f"{__name__}.{self.__class__.__name__}")
+        self.logger = get_class_logger(self)
         self.memory_manager: MemoryManager | None = None
 
     async def _initialize_managers(self) -> None:

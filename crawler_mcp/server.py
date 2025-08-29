@@ -5,6 +5,10 @@ This server provides comprehensive web crawling capabilities with automatic RAG 
 using Crawl4AI 0.7.0, Qdrant vector database, and HF Text Embeddings Inference.
 """
 
+import os
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"  # Prevent fork warning with subprocesses
+
 import warnings
 
 # Suppress specific deprecation warnings from external dependencies FIRST
@@ -40,6 +44,7 @@ from rich.traceback import install  # noqa: E402
 try:
     from .config import settings
     from .core import EmbeddingService, RagService, VectorService
+    from .core.logging import get_logger
     from .tools.crawling import register_crawling_tools
     from .tools.rag import register_rag_tools
 except ImportError:
@@ -54,6 +59,7 @@ except ImportError:
         RagService,
         VectorService,
     )
+    from crawler_mcp.core.logging import get_logger
     from crawler_mcp.tools.crawling import register_crawling_tools
     from crawler_mcp.tools.rag import register_rag_tools
 
@@ -109,7 +115,8 @@ def setup_logging() -> None:
 
 
 setup_logging()
-logger = logging.getLogger(__name__)
+
+logger = get_logger(__name__)
 
 
 # Create FastMCP instance

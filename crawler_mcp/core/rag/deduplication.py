@@ -11,9 +11,9 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from ...models.rag import DocumentChunk
+from ..utils import normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -334,61 +334,13 @@ class DeduplicationManager(ABC):
         Returns:
             Deterministic UUID string
         """
-        normalized_url = self.normalize_url(url)
+        normalized_url = normalize_url(url)
         id_string = f"{normalized_url}:{chunk_index}"
         # Generate a deterministic UUID from the hash
         hash_bytes = hashlib.sha256(id_string.encode()).digest()[:16]
         # Create UUID from the first 16 bytes of the hash
         deterministic_uuid = uuid.UUID(bytes=hash_bytes)
         return str(deterministic_uuid)
-
-    def normalize_url(self, url: str) -> str:
-        """
-        Normalize URL for consistent hashing.
-
-        Normalizes:
-        - Protocol (http -> https)
-        - Removes trailing slashes
-        - Sorts query parameters
-        - Removes fragments
-
-        Args:
-            url: URL to normalize
-
-        Returns:
-            Normalized URL string
-        """
-        parsed = urlparse(url)
-
-        # Normalize protocol to https
-        scheme = "https" if parsed.scheme in ("http", "https") else parsed.scheme
-
-        # Remove trailing slash from path
-        path = parsed.path.rstrip("/")
-        if not path:
-            path = "/"
-
-        # Sort query parameters for consistency
-        if parsed.query:
-            params = parse_qs(parsed.query, keep_blank_values=True)
-            sorted_params = sorted(params.items())
-            query = urlencode(sorted_params, doseq=True)
-        else:
-            query = ""
-
-        # Reconstruct normalized URL (without fragment)
-        normalized = urlunparse(
-            (
-                scheme,
-                parsed.netloc.lower(),  # Lowercase domain
-                path,
-                parsed.params,
-                query,
-                "",  # Remove fragment
-            )
-        )
-
-        return normalized
 
     def calculate_content_similarity(self, content1: str, content2: str) -> float:
         """
