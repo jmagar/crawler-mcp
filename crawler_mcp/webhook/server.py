@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import os
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -39,7 +40,7 @@ logger = logging.getLogger(__name__)
 class WebhookConfig:
     """Configuration for the webhook server."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.github_webhook_secret = os.getenv("GITHUB_WEBHOOK_SECRET", "")
         self.github_token = os.getenv("GITHUB_TOKEN", "")
         self.repos_to_track = os.getenv(
@@ -73,7 +74,7 @@ class WebhookConfig:
 
         self.validate()
 
-    def validate(self):
+    def validate(self) -> None:
         """Validate configuration."""
         if not self.github_webhook_secret:
             raise ValueError("GITHUB_WEBHOOK_SECRET is required")
@@ -88,8 +89,8 @@ class WebhookProcessor:
 
     def __init__(self, config: WebhookConfig):
         self.config = config
-        self.active_processes = {}
-        self.process_queue = asyncio.Queue()
+        self.active_processes: dict[str, Any] = {}
+        self.process_queue: asyncio.Queue[Any] = asyncio.Queue()
         self.stats = {
             "total_webhooks": 0,
             "processed_events": 0,
@@ -164,7 +165,9 @@ class WebhookProcessor:
             ]
         )
 
-    async def process_webhook_event(self, event_type: str, payload: dict[str, Any]):
+    async def process_webhook_event(
+        self, event_type: str, payload: dict[str, Any]
+    ) -> None:
         """Process a webhook event."""
         try:
             repo = payload.get("repository", {}).get("full_name", "")
@@ -216,7 +219,9 @@ class WebhookProcessor:
             logger.error(f"Error processing webhook event: {e}")
             self.stats["failed_events"] += 1
 
-    async def queue_extraction(self, repo: str, pr_number: int, event_type: str):
+    async def queue_extraction(
+        self, repo: str, pr_number: int, event_type: str
+    ) -> None:
         """Queue extraction task."""
         task_id = f"{repo}#{pr_number}"
 
@@ -236,7 +241,7 @@ class WebhookProcessor:
 
         logger.info(f"Queued extraction for {task_id}")
 
-    async def run_extraction_script(self, repo: str, pr_number: int):
+    async def run_extraction_script(self, repo: str, pr_number: int) -> None:
         """Run the extraction script."""
         task_id = f"{repo}#{pr_number}"
 
@@ -281,7 +286,7 @@ class WebhookProcessor:
                 del self.active_processes[task_id]
             self.stats["active_processes"] = len(self.active_processes)
 
-    async def process_queue_worker(self):
+    async def process_queue_worker(self) -> None:
         """Background worker to process the extraction queue."""
         while True:
             try:
@@ -312,7 +317,7 @@ processor = WebhookProcessor(config)
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Manage application lifecycle."""
     # Start background worker
     worker_task = asyncio.create_task(processor.process_queue_worker())
@@ -335,7 +340,9 @@ app = FastAPI(
 
 
 @app.post("/webhook")
-async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
+async def handle_webhook(
+    request: Request, background_tasks: BackgroundTasks
+) -> JSONResponse:
     """Handle GitHub webhook events."""
     try:
         # Get headers
@@ -376,7 +383,7 @@ async def handle_webhook(request: Request, background_tasks: BackgroundTasks):
 
 
 @app.get("/health")
-async def health_check():
+async def health_check() -> JSONResponse:
     """Health check endpoint."""
     return JSONResponse(
         {
@@ -390,7 +397,7 @@ async def health_check():
 
 
 @app.get("/stats")
-async def get_stats():
+async def get_stats() -> JSONResponse:
     """Get processing statistics."""
     return JSONResponse(
         {
@@ -482,7 +489,7 @@ async def get_recent_prs_for_user(
 
 
 @app.get("/recent")
-async def get_recent_prs(days: int = 7):
+async def get_recent_prs(days: int = 7) -> JSONResponse:
     """Get recent PRs from all accessible repositories.
 
     Query parameters:
@@ -514,7 +521,7 @@ async def get_recent_prs(days: int = 7):
 async def batch_extraction(
     request: Request,
     background_tasks: BackgroundTasks,
-):
+) -> JSONResponse:
     """Trigger batch extraction for multiple PRs.
 
     Expected JSON payload:
@@ -619,7 +626,7 @@ async def batch_extraction(
 async def manual_extraction(
     request: Request,
     background_tasks: BackgroundTasks,
-):
+) -> JSONResponse:
     """Manually trigger extraction for a specific PR.
 
     Expected JSON payload:
@@ -680,7 +687,7 @@ async def manual_extraction(
 
 
 @app.get("/")
-async def root():
+async def root() -> JSONResponse:
     """Root endpoint."""
     return JSONResponse(
         {
@@ -699,7 +706,7 @@ async def root():
     )
 
 
-def main():
+def main() -> None:
     """Main entry point for webhook server."""
     uvicorn.run(
         "crawler_mcp.webhook.server:app",

@@ -871,7 +871,7 @@ class RagService:
     async def _process_embeddings_pipeline(
         self,
         document_chunks: list[DocumentChunk],
-        progress_callback: Callable | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
         base_progress: int = 0,
     ) -> int:
         """

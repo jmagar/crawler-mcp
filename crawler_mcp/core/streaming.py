@@ -5,7 +5,7 @@ Streaming utilities for processing large datasets efficiently.
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Generic, TypeVar
 
 from ..config import settings
@@ -250,8 +250,8 @@ class AsyncBatchIterator(Generic[T]):
 
 async def stream_process_chunks(
     chunks: list[DocumentChunk] | AsyncIterator[DocumentChunk],
-    embed_func: Callable[[list[str]], list[list[float]]],
-    store_func: Callable[[list[DocumentChunk]], int],
+    embed_func: Callable[[list[str]], Awaitable[list[list[float]]]],
+    store_func: Callable[[list[DocumentChunk]], Awaitable[int]],
     batch_size: int | None = None,
     progress_callback: Callable[[int, int], None] | None = None,
     ctx: Any | None = None,
@@ -370,7 +370,7 @@ async def parallel_stream_process(
     for result in results:
         if isinstance(result, Exception):
             logger.error(f"Chunk processing error: {result}")
-        else:
-            processed.append(result)
+        elif result is not None:
+            processed.append(result)  # type: ignore[arg-type]
 
     return processed

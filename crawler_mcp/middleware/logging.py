@@ -77,15 +77,15 @@ class LoggingMiddleware:
         forwarded_for = request.headers.get("X-Forwarded-For")
         if forwarded_for:
             # X-Forwarded-For can contain multiple IPs, take the first one
-            return forwarded_for.split(",")[0].strip()
+            return str(forwarded_for.split(",")[0].strip())
 
         # Check other common headers
         real_ip = request.headers.get("X-Real-IP")
         if real_ip:
-            return real_ip.strip()
+            return str(real_ip.strip())
 
         # Fall back to direct client IP
         if hasattr(request, "client") and request.client:
-            return request.client.host
+            return str(request.client.host)
 
         return "unknown"

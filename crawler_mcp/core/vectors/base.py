@@ -34,8 +34,27 @@ def _parse_timestamp(timestamp_value: Any) -> datetime:
             parsed_dt = date_parser.parse(timestamp_value)
             # If parsed datetime has no timezone, set it to UTC
             if parsed_dt.tzinfo is None:
-                return parsed_dt.replace(tzinfo=UTC)
-            return parsed_dt
+                result = parsed_dt.replace(tzinfo=UTC)
+                return datetime(
+                    result.year,
+                    result.month,
+                    result.day,
+                    result.hour,
+                    result.minute,
+                    result.second,
+                    result.microsecond,
+                    result.tzinfo,
+                )
+            return datetime(
+                parsed_dt.year,
+                parsed_dt.month,
+                parsed_dt.day,
+                parsed_dt.hour,
+                parsed_dt.minute,
+                parsed_dt.second,
+                parsed_dt.microsecond,
+                parsed_dt.tzinfo,
+            )
         except (ValueError, TypeError):
             logger.warning(f"Failed to parse timestamp: {timestamp_value}")
 

@@ -149,7 +149,7 @@ class SimilarityDetector:
         if magnitude1 == 0 or magnitude2 == 0:
             return 1.0 if magnitude1 == magnitude2 else 0.0
 
-        return float(dot_product) / (magnitude1 * magnitude2)
+        return float(dot_product / (magnitude1 * magnitude2))
 
     def calculate_levenshtein_similarity(self, text1: str, text2: str) -> float:
         """

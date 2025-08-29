@@ -136,7 +136,7 @@ class SingletonMixin:
         return cls._instances[cls]
 
     @classmethod
-    async def get_instance(cls: type[T]) -> T:
+    async def get_instance(cls) -> Any:
         """Get singleton instance asynchronously."""
         if cls not in cls._instances:
             if cls not in cls._locks:

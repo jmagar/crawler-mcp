@@ -9,9 +9,9 @@ import asyncio
 import contextlib
 import functools
 import inspect
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, TypeVar, cast
 
 from .logging import get_logger
 
@@ -24,7 +24,7 @@ class AsyncLockFactory:
     """Factory for creating and managing asyncio.Lock instances with automatic cleanup."""
 
     _locks: ClassVar[dict[str, asyncio.Lock]] = {}
-    _cleanup_tasks: ClassVar[dict[str, asyncio.Task]] = {}
+    _cleanup_tasks: ClassVar[dict[str, asyncio.Task[Any]]] = {}
 
     @classmethod
     def get_named_lock(cls, name: str) -> asyncio.Lock:
@@ -75,7 +75,7 @@ class AsyncQueueFactory:
     """Factory for creating various types of asyncio queues."""
 
     @staticmethod
-    def create_queue(maxsize: int = 0) -> asyncio.Queue:
+    def create_queue(maxsize: int = 0) -> asyncio.Queue[Any]:
         """
         Create a standard FIFO queue.
 
@@ -88,7 +88,7 @@ class AsyncQueueFactory:
         return asyncio.Queue(maxsize=maxsize)
 
     @staticmethod
-    def create_lifo_queue(maxsize: int = 0) -> asyncio.LifoQueue:
+    def create_lifo_queue(maxsize: int = 0) -> asyncio.LifoQueue[Any]:
         """
         Create a LIFO (stack-like) queue.
 
@@ -101,7 +101,7 @@ class AsyncQueueFactory:
         return asyncio.LifoQueue(maxsize=maxsize)
 
     @staticmethod
-    def create_priority_queue(maxsize: int = 0) -> asyncio.PriorityQueue:
+    def create_priority_queue(maxsize: int = 0) -> asyncio.PriorityQueue[Any]:
         """
         Create a priority queue.
 
@@ -175,8 +175,8 @@ class AsyncEventFactory:
 class TaskManager:
     """Manager for creating and tracking background tasks."""
 
-    def __init__(self):
-        self._tasks: list[asyncio.Task] = []
+    def __init__(self) -> None:
+        self._tasks: list[asyncio.Task[Any]] = []
         self._lock = asyncio.Lock()
 
     async def create_task(
@@ -193,14 +193,16 @@ class TaskManager:
         Returns:
             asyncio.Task instance
         """
-        task = asyncio.create_task(coro, name=name)
+        task: asyncio.Task[T] = asyncio.create_task(
+            cast(Coroutine[Any, Any, T], coro), name=name
+        )
 
         if track:
             async with self._lock:
                 self._tasks.append(task)
 
             # Auto-cleanup completed tasks
-            def cleanup_completed(t: asyncio.Task) -> None:
+            def cleanup_completed(t: asyncio.Task[Any]) -> None:
                 if t.done():
                     cleanup_task = asyncio.create_task(self._remove_task(t))
                     # Store reference to prevent garbage collection warning
@@ -210,7 +212,7 @@ class TaskManager:
 
         return task
 
-    async def _remove_task(self, task: asyncio.Task) -> None:
+    async def _remove_task(self, task: asyncio.Task[Any]) -> None:
         """Remove a task from tracking."""
         async with self._lock:
             if task in self._tasks:
@@ -266,7 +268,25 @@ def create_background_task(
     Returns:
         asyncio.Task instance
     """
-    return asyncio.create_task(_task_manager.create_task(coro, name, track))
+    # Create the task directly and then add tracking if needed
+    task: asyncio.Task[T] = asyncio.create_task(
+        cast(Coroutine[Any, Any, T], coro), name=name
+    )
+
+    if track:
+        # Add tracking in a separate task to avoid blocking
+        def track_task() -> None:
+            async def add_tracking() -> None:
+                async with _task_manager._lock:
+                    _task_manager._tasks.append(task)
+
+            tracking_task = asyncio.create_task(add_tracking())
+            # Store reference to prevent garbage collection
+            tracking_task.add_done_callback(lambda t: None)
+
+        track_task()
+
+    return task
 
 
 async def run_with_semaphore(
@@ -317,7 +337,7 @@ async def run_parallel_limited(
 
 
 @contextlib.asynccontextmanager
-async def timeout_context(timeout: float):
+async def timeout_context(timeout: float) -> AsyncGenerator[None, None]:
     """
     Async context manager for timeout operations.
 
@@ -342,8 +362,8 @@ def retry_async(
     max_retries: int = 3,
     delay: float = 1.0,
     backoff_factor: float = 2.0,
-    exceptions: tuple = (Exception,),
-):
+    exceptions: tuple[type[Exception], ...] = (Exception,),
+) -> Callable[[Callable[..., Awaitable[T]]], Callable[..., Awaitable[T]]]:
     """
     Decorator for retrying async functions with exponential backoff.
 
@@ -391,7 +411,9 @@ def retry_async(
 
 
 @contextlib.asynccontextmanager
-async def thread_pool_executor(max_workers: int | None = None):
+async def thread_pool_executor(
+    max_workers: int | None = None,
+) -> AsyncGenerator[ThreadPoolExecutor, None]:
     """
     Async context manager for ThreadPoolExecutor.
 
@@ -425,6 +447,7 @@ async def run_in_thread_pool(
     Returns:
         Result from the function
     """
+    target_func: Callable[..., T]
     if kwargs:
         # If we have keyword arguments, create a partial function
         partial_func = functools.partial(func, **kwargs)
@@ -442,13 +465,13 @@ async def run_in_thread_pool(
 class AsyncResourceManager:
     """Generic resource manager for async resources with automatic cleanup."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._resources: list[Any] = []
-        self._cleanup_funcs: list[Callable] = []
+        self._cleanup_funcs: list[Callable[[], Any] | None] = []
         self._lock = asyncio.Lock()
 
     async def add_resource(
-        self, resource: Any, cleanup_func: Callable | None = None
+        self, resource: Any, cleanup_func: Callable[[], Any] | None = None
     ) -> None:
         """
         Add a resource to be managed.

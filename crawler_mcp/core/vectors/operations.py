@@ -339,7 +339,7 @@ class DocumentOperations(BaseVectorService):
             logger.error(f"Error deleting chunks by ID: {e}")
             return 0
 
-    async def bulk_update_documents(self, operations: list[dict]) -> int:
+    async def bulk_update_documents(self, operations: list[dict[str, Any]]) -> int:
         """
         Perform bulk update operations on documents.
 

@@ -7,7 +7,7 @@ duplicate exception handling patterns throughout the application.
 
 import functools
 import logging
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, ParamSpec, TypeVar
 
 from .logging import get_logger
@@ -105,7 +105,7 @@ def handle_async_exceptions(
     re_raise: bool = False,
     log_level: int = logging.ERROR,
     message_template: str = "Error in {function_name}: {error}",
-) -> Callable[[Callable[P, T]], Callable[P, T | Any]]:
+) -> Callable[[Callable[P, Awaitable[T]]], Callable[P, Awaitable[T | Any]]]:
     """
     Async version of handle_exceptions decorator.
 
@@ -120,7 +120,7 @@ def handle_async_exceptions(
         Decorated async function with centralized exception handling
     """
 
-    def decorator(func: Callable[P, T]) -> Callable[P, T | Any]:
+    def decorator(func: Callable[P, Awaitable[T]]) -> Callable[P, Awaitable[T | Any]]:
         @functools.wraps(func)
         async def wrapper(*args: P.args, **kwargs: P.kwargs) -> T | Any:
             current_logger = logger_instance or logger

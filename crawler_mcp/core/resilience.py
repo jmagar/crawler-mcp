@@ -10,7 +10,7 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from enum import Enum
-from typing import Any, TypeVar
+from typing import Any, TypeVar, cast
 
 from ..config import settings
 
@@ -193,7 +193,10 @@ def exponential_backoff(
 
             for attempt in range(max_retries):
                 try:
-                    return await func(*args, **kwargs)
+                    result = func(*args, **kwargs)
+                    if asyncio.iscoroutine(result):
+                        return await result  # type: ignore[no-any-return,return-value]
+                    return result  # type: ignore[no-any-return,return-value]
 
                 except exceptions as e:
                     last_exception = e
@@ -263,9 +266,9 @@ def exponential_backoff(
 
         # Return appropriate wrapper based on function type
         if asyncio.iscoroutinefunction(func):
-            return async_wrapper
+            return cast(Callable[..., T], async_wrapper)
         else:
-            return sync_wrapper
+            return cast(Callable[..., T], sync_wrapper)
 
     return decorator
 

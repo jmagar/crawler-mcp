@@ -170,7 +170,7 @@ async def health_check(ctx: Context, detailed: bool = False) -> dict[str, Any]:
             async with EmbeddingService() as embedding_service:
                 embedding_healthy = await embedding_service.health_check()
 
-                embedding_info = {
+                embedding_info: dict[str, Any] = {
                     "status": "healthy" if embedding_healthy else "unhealthy",
                     "url": settings.tei_url,
                     "model": settings.tei_model,
@@ -192,7 +192,7 @@ async def health_check(ctx: Context, detailed: bool = False) -> dict[str, Any]:
             async with VectorService() as vector_service:
                 vector_healthy = await vector_service.health_check()
 
-                vector_info = {
+                vector_info: dict[str, Any] = {
                     "status": "healthy" if vector_healthy else "unhealthy",
                     "url": settings.qdrant_url,
                     "collection": settings.qdrant_collection,

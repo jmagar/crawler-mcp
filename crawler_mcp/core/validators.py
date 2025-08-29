@@ -87,7 +87,7 @@ class StringValidator(BaseValidator):
         self,
         min_length: int | None = None,
         max_length: int | None = None,
-        pattern: str | Pattern | None = None,
+        pattern: str | Pattern[str] | None = None,
         choices: Collection[str] | None = None,
         strip: bool = True,
         lowercase: bool = False,
@@ -420,7 +420,11 @@ class CompositeValidator(BaseValidator):
 
 
 class AsyncValidatorMixin:
-    """Mixin for creating async validators."""
+    """Mixin for creating async validators. Must be used with BaseValidator."""
+
+    def validate(self, value: Any, field_name: str = "value") -> ValidationResult:
+        """Sync validation method that should be implemented by the base class."""
+        raise NotImplementedError("validate method must be implemented")
 
     async def async_validate(
         self, value: Any, field_name: str = "value"
@@ -508,7 +512,7 @@ def validate_and_raise(
     """
     result = validator.validate(value, field_name)
     if not result.is_valid:
-        raise ValidationError(result.error_message)
+        raise ValidationError(result.error_message or "Validation failed")
     return result.value
 
 

@@ -62,7 +62,7 @@ class CacheFactory:
         Returns:
             LRUCache instance
         """
-        return LRUCache(max_size=max_size, cleanup_interval=cleanup_interval)
+        return LRUCache(max_size=max_size)
 
     @staticmethod
     def create_query_cache(
@@ -160,8 +160,8 @@ class CacheKeyGenerator:
     @staticmethod
     def generate_function_key(
         func_name: str,
-        args: tuple,
-        kwargs: dict,
+        args: tuple[Any, ...],
+        kwargs: dict[str, Any],
         include_timestamp: bool = False,
     ) -> str:
         """
@@ -204,7 +204,7 @@ class CacheKeyGenerator:
 
 
 def cached(
-    cache: TTLCache | LRUCache | None = None,
+    cache: TTLCache[Any] | LRUCache[Any] | None = None,
     ttl_seconds: int = 900,
     max_size: int = 1000,
     key_func: Callable[..., str] | None = None,
@@ -224,6 +224,7 @@ def cached(
 
     def decorator(func: F) -> F:
         # Create cache if not provided
+        func_cache: TTLCache[Any] | LRUCache[Any]
         if cache is None:
             func_cache = CacheFactory.create_ttl_cache(
                 max_size=max_size, ttl_seconds=ttl_seconds
@@ -281,14 +282,16 @@ def cached(
 class CacheManager:
     """Manager for multiple cache instances with lifecycle management."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._caches: dict[
-            str, TTLCache | LRUCache | EmbeddingCache | QueryResultCache
+            str, TTLCache[Any] | LRUCache[Any] | EmbeddingCache | QueryResultCache
         ] = {}
         self._initialized = False
 
     def register_cache(
-        self, name: str, cache: TTLCache | LRUCache | EmbeddingCache | QueryResultCache
+        self,
+        name: str,
+        cache: TTLCache[Any] | LRUCache[Any] | EmbeddingCache | QueryResultCache,
     ) -> None:
         """
         Register a cache instance for management.
@@ -302,7 +305,7 @@ class CacheManager:
 
     def get_cache(
         self, name: str
-    ) -> TTLCache | LRUCache | EmbeddingCache | QueryResultCache | None:
+    ) -> TTLCache[Any] | LRUCache[Any] | EmbeddingCache | QueryResultCache | None:
         """
         Get a registered cache by name.
 
@@ -337,7 +340,7 @@ class CacheManager:
                     if asyncio.iscoroutinefunction(cache.clear):
                         await cache.clear()
                     else:
-                        cache.clear()
+                        cache.clear()  # type: ignore[unused-coroutine]
                 logger.debug(f"Cleaned up cache: {name}")
             except Exception as e:
                 logger.error(f"Failed to cleanup cache {name}: {e}")
@@ -403,7 +406,7 @@ class LegacyCacheAdapter:
 
 # Convenience functions for common caching patterns
 async def get_or_compute(
-    cache: TTLCache | LRUCache,
+    cache: TTLCache[Any] | LRUCache[Any],
     key: str,
     compute_func: Callable[[], Any],
     *args: Any,

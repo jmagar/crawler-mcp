@@ -557,7 +557,7 @@ class DirectoryCrawlStrategy(BaseCrawlStrategy):
                 images=[],
                 metadata=metadata,
                 timestamp=datetime.now(UTC),
-                word_count=int(metadata.get("word_count", 0)),
+                word_count=int(str(metadata.get("word_count", "0") or "0")),
             )
 
             return page_content

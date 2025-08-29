@@ -7,6 +7,7 @@ error handling, retries, and resource management across the entire codebase.
 
 import asyncio
 import contextlib
+from collections.abc import AsyncGenerator
 from typing import Any
 
 import httpx
@@ -143,7 +144,7 @@ class AsyncHttpClient:
         """Perform a simple health check request."""
         try:
             response = await self.get(url)
-            return 200 <= response.status_code < 300
+            return bool(200 <= response.status_code < 300)
         except Exception as e:
             logger.debug(f"Health check failed for {url}: {e}")
             return False
@@ -221,7 +222,9 @@ class HttpClientFactory:
 
 
 @contextlib.asynccontextmanager
-async def get_http_client(config: HttpClientConfig | None = None):
+async def get_http_client(
+    config: HttpClientConfig | None = None,
+) -> AsyncGenerator["AsyncHttpClient", None]:
     """
     Async context manager for getting a configured HTTP client.
 
@@ -237,7 +240,7 @@ async def get_http_client(config: HttpClientConfig | None = None):
 
 
 @contextlib.asynccontextmanager
-async def get_tei_client():
+async def get_tei_client() -> AsyncGenerator["AsyncHttpClient", None]:
     """Async context manager for TEI service HTTP client."""
     client = HttpClientFactory.create_tei_client()
     try:
@@ -247,7 +250,9 @@ async def get_tei_client():
 
 
 @contextlib.asynccontextmanager
-async def get_github_client(token: str | None = None):
+async def get_github_client(
+    token: str | None = None,
+) -> AsyncGenerator["AsyncHttpClient", None]:
     """Async context manager for GitHub API HTTP client."""
     client = HttpClientFactory.create_github_client(token)
     try:
@@ -257,7 +262,7 @@ async def get_github_client(token: str | None = None):
 
 
 @contextlib.asynccontextmanager
-async def get_web_scraping_client():
+async def get_web_scraping_client() -> AsyncGenerator["AsyncHttpClient", None]:
     """Async context manager for web scraping HTTP client."""
     client = HttpClientFactory.create_web_scraping_client()
     try:
@@ -276,7 +281,8 @@ async def simple_get(url: str, timeout: float = 30.0) -> str:
     try:
         async with get_http_client() as client:
             response = await client.get(url)
-            return await response.aread().decode()
+            content_bytes = await response.aread()
+            return str(content_bytes.decode("utf-8"))
     except Exception as e:
         logger.warning(f"Simple GET request to {url} failed: {e}")
         return ""

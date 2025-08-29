@@ -61,6 +61,7 @@ dev = [
     "pre-commit>=3.5.0",
     "coverage>=7.10.3",
     "types-psutil>=7.0.0.20250801",
+    "types-python-dateutil>=2.9.0.20241003",
 ]
 test = [
     "pytest>=8.4.0",
@@ -141,6 +142,47 @@ module = [
 ignore_missing_imports = true
 follow_imports = "skip"
 
+[[tool.mypy.overrides]]
+module = [
+    "pydantic",
+    "pydantic.*",
+    "pydantic_settings",
+    "pydantic_settings.*",
+    "fastmcp",
+    "fastmcp.*",
+    "starlette",
+    "starlette.*",
+    "httpx",
+    "httpx.*",
+    "uvicorn",
+    "uvicorn.*",
+    "dotenv",
+    "fastapi",
+    "fastapi.*",
+    "qdrant_client",
+    "qdrant_client.*",
+    "transformers",
+    "transformers.*",
+    "torch",
+    "torch.*",
+    "sentence_transformers",
+    "sentence_transformers.*",
+    "tiktoken",
+    "tiktoken.*",
+    "rich",
+    "rich.*",
+    "psutil",
+    "psutil.*",
+    "dateutil",
+    "dateutil.*"
+]
+ignore_missing_imports = true
+follow_imports = "skip"
+
+[[tool.mypy.overrides]]
+module = "crawler_mcp.*"
+disallow_untyped_decorators = false
+
 [tool.pytest.ini_options]
 cache_dir = ".cache/pytest"
 minversion = "8.4"
@@ -173,6 +215,8 @@ markers = [
 [dependency-groups]
 dev = [
     "pre-commit>=4.3.0",
+    "types-psutil>=7.0.0.20250822",
+    "types-python-dateutil>=2.9.0.20250822",
 ]
 
 # Dependency groups removed - use project.optional-dependencies instead

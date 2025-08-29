@@ -243,28 +243,38 @@ class CrawlerService(AsyncServiceBase):
             # Configure extraction strategy
             if extraction_strategy == "aggressive":
                 # Aggressive pruning for cleaner content
-                content_filter = PruningContentFilter(
-                    threshold=0.6,  # Higher threshold for more aggressive pruning
-                    threshold_type="dynamic",
-                    min_word_threshold=10,  # Ignore shorter text blocks
-                )
+                content_filter = None
+                if PruningContentFilter is not None:
+                    content_filter = PruningContentFilter(
+                        threshold=0.6,  # Higher threshold for more aggressive pruning
+                        threshold_type="dynamic",
+                        min_word_threshold=10,  # Ignore shorter text blocks
+                    )
             elif extraction_strategy == "minimal":
                 # Minimal pruning to preserve more content
-                content_filter = PruningContentFilter(
-                    threshold=0.3,  # Lower threshold for less pruning
-                    threshold_type="dynamic",
-                    min_word_threshold=3,  # Keep even short text
-                )
+                content_filter = None
+                if PruningContentFilter is not None:
+                    content_filter = PruningContentFilter(
+                        threshold=0.3,  # Lower threshold for less pruning
+                        threshold_type="dynamic",
+                        min_word_threshold=3,  # Keep even short text
+                    )
             else:
                 # Default balanced strategy
-                content_filter = PruningContentFilter(
-                    threshold=0.45,  # Prune nodes below 45% relevance score
-                    threshold_type="dynamic",  # Dynamic scoring
-                    min_word_threshold=5,  # Ignore very short text blocks
-                )
+                content_filter = None
+                if PruningContentFilter is not None:
+                    content_filter = PruningContentFilter(
+                        threshold=0.45,  # Prune nodes below 45% relevance score
+                        threshold_type="dynamic",  # Dynamic scoring
+                        min_word_threshold=5,  # Ignore very short text blocks
+                    )
 
             # Create markdown generator with content filter
-            markdown_generator = DefaultMarkdownGenerator(content_filter=content_filter)
+            markdown_generator = None
+            if DefaultMarkdownGenerator is not None:
+                markdown_generator = DefaultMarkdownGenerator(
+                    content_filter=content_filter
+                )
 
             # Configure crawl parameters
             crawl_kwargs = {

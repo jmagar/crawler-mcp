@@ -42,6 +42,17 @@ from .base import BaseCrawlStrategy
 logger = get_logger(__name__)
 
 
+class _FallbackMarkdownResult:
+    """Fallback class for MarkdownGenerationResult when crawl4ai has issues."""
+
+    def __init__(self) -> None:
+        self.raw_markdown = ""
+        self.markdown_with_citations = ""
+        self.references_markdown = ""
+        self.fit_markdown = None
+        self.fit_html = None
+
+
 class WebCrawlStrategy(BaseCrawlStrategy):
     """
     High-performance web crawling strategy with streaming, caching, and GPU acceleration.
@@ -142,7 +153,12 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                 )
             # Deduplicate while preserving order
             seen = set()
-            sitemap_seeds = [s for s in sitemap_seeds if not (s in seen or seen.add(s))]
+            deduplicated = []
+            for s in sitemap_seeds:
+                if s not in seen:
+                    seen.add(s)
+                    deduplicated.append(s)
+            sitemap_seeds = deduplicated
             self.logger.info(
                 "Discovered %s sitemap seeds: %s...",
                 len(sitemap_seeds),
@@ -167,8 +183,8 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     getattr(run_config.deep_crawl_strategy, "max_depth", "Unknown"),
                 )
 
-            pages = []
-            errors = []
+            pages: list[dict[str, Any]] = []
+            errors: list[str] = []
             total_bytes = 0
             unique_domains = set()
             total_links_discovered = 0
@@ -205,7 +221,7 @@ class WebCrawlStrategy(BaseCrawlStrategy):
 
             # Process results outside suppress_stdout context for debugging
             # Prefer fit_markdown for cleaner content, respecting global setting when request doesn't specify
-            prefer_fit_markdown = (
+            prefer_fit_markdown = bool(
                 request.prefer_fit_markdown
                 if getattr(request, "prefer_fit_markdown", None) is not None
                 else getattr(settings, "crawl_prefer_fit_markdown", True)
@@ -343,13 +359,11 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                     result._markdown,
                 )
                 # Replace the integer hash with an empty MarkdownGenerationResult
-                result._markdown = MarkdownGenerationResult(
-                    raw_markdown="",
-                    markdown_with_citations="",
-                    references_markdown="",
-                    fit_markdown=None,
-                    fit_html=None,
-                )
+                if MarkdownGenerationResult is not None:
+                    result._markdown = _FallbackMarkdownResult()
+                else:
+                    # Fallback when crawl4ai is not available
+                    result._markdown = ""
 
             # Also check if markdown property access would fail
             # This is a defensive check
@@ -366,13 +380,11 @@ class WebCrawlStrategy(BaseCrawlStrategy):
                             result.url,
                         )
                         # Force set a safe markdown value
-                        result._markdown = MarkdownGenerationResult(
-                            raw_markdown="",
-                            markdown_with_citations="",
-                            references_markdown="",
-                            fit_markdown=None,
-                            fit_html=None,
-                        )
+                        if MarkdownGenerationResult is not None:
+                            result._markdown = _FallbackMarkdownResult()
+                        else:
+                            # Fallback when crawl4ai is not available
+                            result._markdown = ""
         except Exception as e:
             logger.debug(
                 "Sanitization warning for %s: %s",
@@ -645,7 +657,11 @@ class WebCrawlStrategy(BaseCrawlStrategy):
         )
 
         # Create markdown generator with content filter
-        markdown_generator = DefaultMarkdownGeneratorImpl(content_filter=content_filter)
+        markdown_generator = None
+        if DefaultMarkdownGeneratorImpl is not None:
+            markdown_generator = DefaultMarkdownGeneratorImpl(
+                content_filter=content_filter
+            )
 
         # High-performance scraping strategy (20x faster parsing)
         scraping_strategy = None
@@ -994,7 +1010,8 @@ class WebCrawlStrategy(BaseCrawlStrategy):
             ):
                 if resp.status != 200:
                     return ""
-                return await resp.text()
+                text_content = await resp.text()
+                return str(text_content)
         except Exception:
             return ""
 

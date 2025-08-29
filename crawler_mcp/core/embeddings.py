@@ -93,7 +93,7 @@ class EmbeddingService(AsyncServiceBase):
         try:
             await self._ensure_client_open()
             response = await self.client.get(f"{self.base_url}/health")
-            return response.status_code == 200
+            return bool(response.status_code == 200)
         except Exception as e:
             self.logger.error(f"TEI health check failed: {e}")
             return False

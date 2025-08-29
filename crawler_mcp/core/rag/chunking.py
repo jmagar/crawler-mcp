@@ -491,9 +491,9 @@ class TokenBasedChunker(ChunkingStrategy):
                     break
 
                 # Extract chunk using actual positions from original text
-                text_start_pos = word_positions[start_word]["start"]
-                text_end_pos = (
-                    word_positions[end_word - 1]["end"] if end_word > 0 else 0
+                text_start_pos: int = word_positions[start_word]["start"]  # type: ignore[assignment]
+                text_end_pos: int = (
+                    word_positions[end_word - 1]["end"] if end_word > 0 else 0  # type: ignore[assignment]
                 )
                 chunk_text = text[text_start_pos:text_end_pos]
                 chunk_words = [wp["word"] for wp in word_positions[start_word:end_word]]
