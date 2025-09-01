@@ -107,3 +107,9 @@ class GitHubClient:
     ) -> list[dict[str, Any]]:
         # PRs are issues under the hood for issue comments
         return await self._paginate(f"/repos/{owner}/{repo}/issues/{number}/comments")
+
+    async def list_pull_files(
+        self, owner: str, repo: str, number: int
+    ) -> list[dict[str, Any]]:
+        """List files changed in a pull request."""
+        return await self._paginate(f"/repos/{owner}/{repo}/pulls/{number}/files")

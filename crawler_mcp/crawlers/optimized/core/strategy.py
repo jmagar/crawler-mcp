@@ -64,6 +64,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
 
         # Internal state
         self._session_active = False
+        self._last_pr_report: dict[str, Any] | None = None
 
         self.logger.info(
             f"Initialized OptimizedCrawlerStrategy with config: {self.config}"
@@ -293,7 +294,6 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                     if first:
                         r = first[0]
                         base_host = urlparse(start_url).netloc
-                        base_root = f"{urlparse(start_url).scheme}://{base_host}"
                         # Use the same link extraction logic as reporting to avoid schema mismatches
                         try:
                             candidates = self.result_converter._extract_links(r)  # type: ignore[arg-type]
@@ -349,7 +349,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                         budget = max(
                             1, int(getattr(self.config, "fallback_max_links", 200))
                         )
-                        candidates = [start_url] + out[: min(budget, max_urls - 1)]
+                        candidates = [start_url, *out[: min(budget, max_urls - 1)]]
 
                         # dedupe with normalization
                         def _norm(u: str) -> str:
@@ -620,7 +620,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                 base_host = urlparse(urls[0]).netloc if urls else ""
                 base_root = f"{urlparse(urls[0]).scheme}://{base_host}" if urls else ""
                 link_pool: list[str] = []
-                seen: set[str] = set(u for u in urls)
+                seen: set[str] = set(urls)
                 for r in results:
                     if getattr(r, "success", False):
                         try:
@@ -730,7 +730,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                 base_hosts = {urlparse(u).netloc for u in urls}
                 # Harvest internal links from successful pages
                 link_set: list[str] = []
-                seen: set[str] = set(u for u in urls)
+                seen: set[str] = set(urls)
                 budget = max(
                     0, int(getattr(self.config, "follow_internal_budget", 200))
                 )
@@ -780,7 +780,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                                     candidates = list(links.get("internal", []) or [])
                                 elif isinstance(links, list):
                                     candidates = links[:]
-                            host = urlparse(getattr(r, "url", "")).netloc
+                            # host not needed directly; base_hosts already computed
                             for lk in candidates:
                                 try:
                                     pu = urlparse(lk)
@@ -808,10 +808,10 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                     )
                     fb_browser = browser_config
                     if not self.config.javascript_enabled:
-                        try:
+                        import contextlib
+
+                        with contextlib.suppress(Exception):
                             fb_browser = self.browser_factory.create_javascript_config()
-                        except Exception:
-                            pass
                     fb_results = await self.parallel_engine.crawl_batch(
                         link_set,
                         fb_browser,
@@ -860,6 +860,10 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
             reviews = await gh.list_reviews(owner, repo, number)
             rcomments = await gh.list_review_comments(owner, repo, number)
             icomments = await gh.list_issue_comments(owner, repo, number)
+            try:
+                files = await gh.list_pull_files(owner, repo, number)
+            except Exception:
+                files = []
 
         title = pr.get("title", f"PR #{number}")
         state = pr.get("state", "")
@@ -957,6 +961,71 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
             },
         )
 
+        # Build a structured PR report for downstream reporting
+        try:
+            reviewer_states: dict[str, int] = {}
+            reviewers: set[str] = set()
+            for rv in reviews:
+                st = str(rv.get("state", "")).upper()
+                reviewer_states[st] = reviewer_states.get(st, 0) + 1
+                u = (rv.get("user", {}) or {}).get("login")
+                if u:
+                    reviewers.add(str(u))
+
+            participants: set[str] = set()
+            if author:
+                participants.add(author)
+            for c in rcomments:
+                u = (c.get("user", {}) or {}).get("login")
+                if u:
+                    participants.add(str(u))
+            for c in icomments:
+                u = (c.get("user", {}) or {}).get("login")
+                if u:
+                    participants.add(str(u))
+
+            comments_per_file: dict[str, int] = {}
+            for c in rcomments:
+                pth = str(c.get("path", ""))
+                if pth:
+                    comments_per_file[pth] = comments_per_file.get(pth, 0) + 1
+
+            file_stats = []
+            for f in files or []:
+                p = str(f.get("filename", ""))
+                file_stats.append(
+                    {
+                        "path": p,
+                        "status": f.get("status"),
+                        "additions": f.get("additions"),
+                        "deletions": f.get("deletions"),
+                        "changes": f.get("changes"),
+                        "comments": comments_per_file.get(p, 0),
+                    }
+                )
+
+            self._last_pr_report = {
+                "owner": owner,
+                "repo": repo,
+                "pr_number": number,
+                "title": title,
+                "state": state,
+                "merged": merged,
+                "author": author,
+                "created_at": created_at,
+                "updated_at": updated_at,
+                "reviews_total": len(reviews),
+                "review_states": reviewer_states,
+                "reviewers": sorted(reviewers),
+                "review_comments_total": len(rcomments),
+                "conversation_comments_total": len(icomments),
+                "participants": sorted(participants),
+                "files_total": len(files or []),
+                "files": file_stats,
+            }
+        except Exception:
+            self._last_pr_report = None
+
         # Attach embeddings if enabled
         try:
             if self.config.enable_embeddings:
@@ -1018,6 +1087,10 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
             self._last_pages = []
 
         return response
+
+    def get_pr_report(self) -> dict[str, Any] | None:
+        """Return the last GitHub PR report if available."""
+        return self._last_pr_report
 
     async def _process_results(
         self,

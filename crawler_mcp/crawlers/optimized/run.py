@@ -462,7 +462,7 @@ async def _run(args: argparse.Namespace) -> int:
                 locales = []
                 break
             locales.extend([p.strip() for p in e.split(",") if p.strip()])
-        cfg.allowed_locales = [l.lower() for l in locales]
+        cfg.allowed_locales = [loc.lower() for loc in locales]
 
     # Subcommand: Qdrant semantic search
     if getattr(args, "qdrant_search", None):
@@ -606,10 +606,10 @@ async def _run(args: argparse.Namespace) -> int:
     if args.per_page_log or show_progress:
 
         def _print(s: str) -> None:
-            try:
+            import contextlib
+
+            with contextlib.suppress(Exception):
                 print(s, flush=True)
-            except Exception:
-                pass
 
         def on_crawl_started(urls=None, metrics=None, **_):  # type: ignore[no-redef]
             if not urls:
@@ -800,22 +800,22 @@ async def _run(args: argparse.Namespace) -> int:
         def _sty(s: str, code: str) -> str:
             return f"\033[{code}m{s}\033[0m" if _COLOR else s
 
-        def H(s: str) -> str:  # Header
+        def H(s: str) -> str:  # Header  # noqa: N802
             return _sty(s, "1;36")
 
-        def KEY(s: str) -> str:  # Label
+        def KEY(s: str) -> str:  # Label  # noqa: N802
             return _sty(s, "90")
 
-        def VAL(s: str) -> str:  # Value
+        def VAL(s: str) -> str:  # Value  # noqa: N802
             return _sty(s, "36")
 
-        def GOOD(s: str) -> str:
+        def GOOD(s: str) -> str:  # noqa: N802
             return _sty(s, "32")
 
-        def BAD(s: str) -> str:
+        def BAD(s: str) -> str:  # noqa: N802
             return _sty(s, "31")
 
-        def WARN(s: str) -> str:
+        def WARN(s: str) -> str:  # noqa: N802
             return _sty(s, "33")
 
         success = _hdr("X-Crawl-Success", "False").lower() == "true"
@@ -873,13 +873,13 @@ async def _run(args: argparse.Namespace) -> int:
             try:
                 page_links = getattr(pg, "links", []) or []
                 total_link_instances += len(page_links)
-                for l in page_links:
-                    if not l:
+                for link in page_links:
+                    if not link:
                         continue
-                    unique_link_set.add(l)
+                    unique_link_set.add(link)
                     if _urlparse:
                         try:
-                            host = _urlparse(l).netloc
+                            host = _urlparse(link).netloc
                             if host:
                                 host_counts[host] = host_counts.get(host, 0) + 1
                         except Exception:
@@ -1196,6 +1196,81 @@ async def _run(args: argparse.Namespace) -> int:
             print("\n" + H("📝 Outputs"))
             for label, path in out_lines:
                 print(KEY(f"- {label}:"), VAL(path))
+
+        # GitHub PR custom report (pretty-print and attach to JSON report)
+        try:
+            if headers.get("X-Extraction-Method", "") == "github_pr_api":
+                pr_rep = (
+                    strat.get_pr_report() if hasattr(strat, "get_pr_report") else None
+                )
+                if pr_rep:
+                    print("\n" + H("🧾 GitHub PR Report"))
+                    print(
+                        KEY("- Repo:"),
+                        VAL(f"{pr_rep.get('owner', '')}/{pr_rep.get('repo', '')}"),
+                    )
+                    print(
+                        KEY("- PR:"),
+                        VAL(
+                            f"#{pr_rep.get('pr_number', '')} {pr_rep.get('title', '')}"
+                        ),
+                    )
+                    print(
+                        KEY("- State:"),
+                        VAL(
+                            "merged"
+                            if pr_rep.get("merged")
+                            else pr_rep.get("state", "")
+                        ),
+                    )
+                    print(KEY("- Author:"), VAL(str(pr_rep.get("author", ""))))
+                    print(
+                        KEY("- Reviews:"),
+                        VAL(str(pr_rep.get("reviews_total", 0))),
+                        KEY(str(pr_rep.get("review_states", {}))),
+                    )
+                    print(
+                        KEY("- Review Comments:"),
+                        VAL(str(pr_rep.get("review_comments_total", 0))),
+                    )
+                    print(
+                        KEY("- Conversation Comments:"),
+                        VAL(str(pr_rep.get("conversation_comments_total", 0))),
+                    )
+                    print(
+                        KEY("- Participants:"),
+                        VAL(", ".join(pr_rep.get("participants", []))),
+                    )
+                    files = pr_rep.get("files", []) or []
+                    if files:
+                        try:
+                            files_sorted = sorted(
+                                files,
+                                key=lambda x: int(x.get("comments", 0)),
+                                reverse=True,
+                            )
+                        except Exception:
+                            files_sorted = files
+                        top = files_sorted[:5]
+                        if top:
+                            print(KEY("- Files (top by comments):"))
+                            for it in top:
+                                path = it.get("path", "")
+                                comments = it.get("comments", 0)
+                                changes = it.get("changes", 0)
+                                print(
+                                    "   ",
+                                    VAL(path),
+                                    KEY(f"comments={comments}, changes={changes}"),
+                                )
+                    # Attach to report JSON structure
+                    try:
+                        if isinstance(report, dict):
+                            report["github_pr_report"] = pr_rep
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         # Optional: write JSON report
         if args.report_json:
