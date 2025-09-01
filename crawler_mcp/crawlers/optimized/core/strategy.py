@@ -873,93 +873,178 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         updated_at = pr.get("updated_at", "")
         body = pr.get("body", "") or ""
 
-        # Build a markdown content document aggregating PR details and discussions
-        lines: list[str] = []
-        lines.append(f"# {title} (#{number})")
-        lines.append(f"Repository: {owner}/{repo}")
-        lines.append(f"Author: {author}")
-        lines.append(f"State: {'merged' if merged else state}")
+        # Build per-item pages for granular embeddings
+        pages: list[PageContent] = []
+
+        # PR overview page
+        overview_lines: list[str] = []
+        overview_lines.append(f"# {title} (#{number})")
+        overview_lines.append(f"Repository: {owner}/{repo}")
+        overview_lines.append(f"Author: {author}")
+        overview_lines.append(f"State: {'merged' if merged else state}")
         if created_at:
-            lines.append(f"Created: {created_at}")
+            overview_lines.append(f"Created: {created_at}")
         if updated_at:
-            lines.append(f"Updated: {updated_at}")
-        lines.append("")
+            overview_lines.append(f"Updated: {updated_at}")
+        overview_lines.append("")
         if body:
-            lines.append("## PR Description")
-            lines.append(body)
-            lines.append("")
-
-        # Reviews summary
-        if reviews:
-            lines.append(f"## Reviews ({len(reviews)})")
-            for rv in reviews:
-                r_user = (rv.get("user", {}) or {}).get("login", "")
-                r_state = rv.get("state", "")
-                r_submitted = rv.get("submitted_at", rv.get("commit_id", ""))
-                r_body = rv.get("body", "") or ""
-                lines.append(
-                    f"- Reviewer: {r_user} | State: {r_state} | At: {r_submitted}"
-                )
-                if r_body:
-                    lines.append("")
-                    lines.append(r_body)
-                    lines.append("")
-            lines.append("")
-
-        # Review comments (on code)
-        if rcomments:
-            lines.append(f"## Review Comments ({len(rcomments)})")
-            for c in rcomments:
-                c_user = (c.get("user", {}) or {}).get("login", "")
-                path = c.get("path", "")
-                line = c.get("line") or c.get("original_line") or ""
-                created = c.get("created_at", "")
-                body_c = c.get("body", "") or ""
-                meta = f"{path}:{line}" if path else ""
-                lines.append(f"- {c_user} {f'({meta})' if meta else ''} at {created}")
-                if body_c:
-                    lines.append("")
-                    lines.append(body_c)
-                    lines.append("")
-            lines.append("")
-
-        # Issue comments (on the PR conversation)
-        if icomments:
-            lines.append(f"## Conversation Comments ({len(icomments)})")
-            for c in icomments:
-                c_user = (c.get("user", {}) or {}).get("login", "")
-                created = c.get("created_at", "")
-                body_c = c.get("body", "") or ""
-                lines.append(f"- {c_user} at {created}")
-                if body_c:
-                    lines.append("")
-                    lines.append(body_c)
-                    lines.append("")
-            lines.append("")
-
-        content_md = "\n".join(lines).strip()
-
-        page = PageContent(
-            url=url,
-            title=f"{owner}/{repo} PR #{number}: {title}",
-            content=content_md,
-            markdown=content_md,
-            html="",
-            links=[],
-            images=[],
-            metadata={
-                "source": "github_pr",
-                "owner": owner,
-                "repo": repo,
-                "pr_number": number,
-                "pr_state": state,
-                "pr_merged": merged,
-                "author": author,
-                "reviews_count": len(reviews),
-                "review_comments_count": len(rcomments),
-                "issue_comments_count": len(icomments),
-            },
+            overview_lines.append("## PR Description")
+            overview_lines.append(body)
+            overview_lines.append("")
+        overview_md = "\n".join(overview_lines).strip()
+        pages.append(
+            PageContent(
+                url=url,
+                title=f"PR #{number}: {title}",
+                content=overview_md,
+                markdown=overview_md,
+                html="",
+                links=[],
+                images=[],
+                metadata={
+                    "source": "github_pr",
+                    "item_type": "pr_overview",
+                    "owner": owner,
+                    "repo": repo,
+                    "pr_number": number,
+                    "pr_state": state,
+                    "pr_merged": merged,
+                    "author": author,
+                    "reviews_count": len(reviews),
+                    "review_comments_count": len(rcomments),
+                    "issue_comments_count": len(icomments),
+                },
+            )
         )
+
+        # Review items
+        for rv in reviews:
+            reviewer = (rv.get("user", {}) or {}).get("login", "")
+            r_state = rv.get("state", "")
+            submitted = rv.get("submitted_at", rv.get("commit_id", ""))
+            r_body = rv.get("body", "") or ""
+            review_id = rv.get("id")
+            review_url = (
+                rv.get("html_url") or f"{url}#pullrequestreview-{review_id}"
+                if review_id
+                else url
+            )
+
+            lines_r: list[str] = []
+            lines_r.append(f"## Review by {reviewer} - {r_state}")
+            if submitted:
+                lines_r.append(f"Submitted: {submitted}")
+            lines_r.append("")
+            if r_body:
+                lines_r.append(r_body)
+            md_r = "\n".join(lines_r).strip()
+            pages.append(
+                PageContent(
+                    url=review_url,
+                    title=f"PR #{number} Review: {reviewer} - {r_state}",
+                    content=md_r,
+                    markdown=md_r,
+                    html="",
+                    links=[],
+                    images=[],
+                    metadata={
+                        "source": "github_pr",
+                        "item_type": "pr_review",
+                        "owner": owner,
+                        "repo": repo,
+                        "pr_number": number,
+                        "author": reviewer,
+                        "review_id": review_id,
+                        "review_state": r_state,
+                        "submitted_at": submitted,
+                    },
+                )
+            )
+
+        # Review comments (code)
+        for c in rcomments:
+            c_user = (c.get("user", {}) or {}).get("login", "")
+            path = c.get("path", "")
+            line_no = c.get("line") or c.get("original_line") or ""
+            created = c.get("created_at", "")
+            body_c = c.get("body", "") or ""
+            comment_id = c.get("id")
+            comment_url = c.get("html_url") or (
+                f"{url}#discussion_r{comment_id}" if comment_id else url
+            )
+
+            lines_c: list[str] = []
+            header = f"## Review Comment by {c_user}"
+            if path:
+                header += f" on {path}:{line_no}"
+            lines_c.append(header)
+            if created:
+                lines_c.append(f"Created: {created}")
+            lines_c.append("")
+            if body_c:
+                lines_c.append(body_c)
+            md_c = "\n".join(lines_c).strip()
+            pages.append(
+                PageContent(
+                    url=comment_url,
+                    title=f"PR #{number} Review Comment: {path}:{line_no}",
+                    content=md_c,
+                    markdown=md_c,
+                    html="",
+                    links=[],
+                    images=[],
+                    metadata={
+                        "source": "github_pr",
+                        "item_type": "pr_review_comment",
+                        "owner": owner,
+                        "repo": repo,
+                        "pr_number": number,
+                        "author": c_user,
+                        "comment_id": comment_id,
+                        "path": path,
+                        "line": line_no,
+                        "created_at": created,
+                    },
+                )
+            )
+
+        # Conversation comments (on PR thread)
+        for c in icomments:
+            c_user = (c.get("user", {}) or {}).get("login", "")
+            created = c.get("created_at", "")
+            body_c = c.get("body", "") or ""
+            comment_id = c.get("id")
+            comment_url = c.get("html_url") or url
+
+            lines_ic: list[str] = []
+            lines_ic.append(f"## Conversation Comment by {c_user}")
+            if created:
+                lines_ic.append(f"Created: {created}")
+            lines_ic.append("")
+            if body_c:
+                lines_ic.append(body_c)
+            md_ic = "\n".join(lines_ic).strip()
+            pages.append(
+                PageContent(
+                    url=comment_url,
+                    title=f"PR #{number} Conversation Comment by {c_user}",
+                    content=md_ic,
+                    markdown=md_ic,
+                    html="",
+                    links=[],
+                    images=[],
+                    metadata={
+                        "source": "github_pr",
+                        "item_type": "pr_conversation_comment",
+                        "owner": owner,
+                        "repo": repo,
+                        "pr_number": number,
+                        "author": c_user,
+                        "comment_id": comment_id,
+                        "created_at": created,
+                    },
+                )
+            )
 
         # Build a structured PR report for downstream reporting
         try:
@@ -1026,44 +1111,26 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         except Exception:
             self._last_pr_report = None
 
-        # Attach embeddings if enabled
+        # Attach embeddings for all items (and upsert to Qdrant if enabled)
         try:
             if self.config.enable_embeddings:
 
                 class _Tmp:
-                    def __init__(self, pages):
-                        self.pages = pages
+                    def __init__(self, pages_list):
+                        self.pages = pages_list
 
-                tmp = _Tmp([page])
-                await self._attach_embeddings(tmp)
+                await self._attach_embeddings(_Tmp(pages))
         except Exception as e:  # pragma: no cover
             self.logger.warning(
                 f"TEI embeddings skipped for GitHub PR due to error: {e}"
             )
 
-        # Optional Qdrant upsert
-        try:
-            if getattr(self.config, "enable_qdrant", False):
-                vec = page.metadata.get("embedding")
-                if isinstance(vec, list) and vec:
-
-                    class _Tmp2:
-                        def __init__(self, pages):
-                            self.pages = pages
-
-                    await self._upsert_qdrant(_Tmp2([page]), vector_dim=len(vec))
-                else:
-                    self.logger.warning(
-                        "Qdrant upsert skipped: no embedding found for PR page"
-                    )
-        except Exception as e:
-            self.logger.warning(
-                f"Qdrant upsert skipped for GitHub PR due to error: {e}"
-            )
-
         # Build response similar to _process_results, with one synthesized page
+        combined_md = "\n\n".join(
+            [getattr(pg, "markdown", "") or getattr(pg, "content", "") for pg in pages]
+        )
         combined_html = (
-            f"<!-- EXTRACTED_CONTENT -->\n{content_md}\n<!-- END_CONTENT -->\n"
+            f"<!-- EXTRACTED_CONTENT -->\n{combined_md}\n<!-- END_CONTENT -->\n"
         )
         response = AsyncCrawlResponse(
             html=combined_html, status_code=200, response_headers={}
@@ -1078,11 +1145,11 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         )
         response.response_headers["X-Total-Links"] = "0"
         response.response_headers["X-Extraction-Method"] = "github_pr_api"
-        response.response_headers["X-Content-Length"] = str(len(content_md))
+        response.response_headers["X-Content-Length"] = str(len(combined_md))
 
         # Store last pages for downstream consumers
         try:
-            self._last_pages = [page]
+            self._last_pages = pages
         except Exception:
             self._last_pages = []
 
