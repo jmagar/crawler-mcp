@@ -62,7 +62,12 @@ class ContentHasher:
             Content with normalized whitespace
         """
         # Replace multiple whitespace with single space
-        normalized = re.sub(r"\s+", " ", content.strip())
+        # Safely handle content that might be a list
+        if isinstance(content, list):
+            content_str = "\n".join(str(item) for item in content)
+        else:
+            content_str = str(content)
+        normalized = re.sub(r"\s+", " ", content_str.strip())
         return normalized
 
     @staticmethod

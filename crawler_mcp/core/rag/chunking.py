@@ -13,6 +13,16 @@ from typing import Any
 
 from ...config import settings
 
+
+def safe_strip(content) -> str:
+    """Safely strip content, handling lists and other types."""
+    if content is None:
+        return ""
+    if isinstance(content, list):
+        return "\n".join(str(item) for item in content).strip()
+    return str(content).strip()
+
+
 logger = logging.getLogger(__name__)
 
 # Approximate word-to-token ratio for different tokenizers
@@ -155,7 +165,7 @@ class TokenCounter:
         Returns:
             Accurate token count
         """
-        if not text.strip():
+        if not safe_strip(text):
             return 0
 
         if self.tokenizer and self.tokenizer_type == "qwen3":
@@ -273,15 +283,17 @@ class ChunkingStrategy(ABC):
 
     def _assess_completeness(self, chunk: str) -> float:
         """Assess how complete the chunk is (sentences end properly, etc.)."""
-        if not chunk.strip():
+        if not safe_strip(chunk):
             return 0.0
 
         # Check if chunk ends with sentence punctuation
-        last_char = chunk.strip()[-1]
-        if last_char in ".!?":
-            return 1.0
-        elif last_char in ",;:":
-            return 0.7
+        stripped_chunk = safe_strip(chunk)
+        if stripped_chunk:
+            last_char = stripped_chunk[-1]
+            if last_char in ".!?":
+                return 1.0
+            elif last_char in ",;:":
+                return 0.7
         else:
             return 0.5
 
@@ -292,7 +304,7 @@ class ChunkingStrategy(ABC):
         if len(sentences) < 2:
             return 0.5
 
-        avg_sentence_length = sum(len(s.strip().split()) for s in sentences) / len(
+        avg_sentence_length = sum(len(safe_strip(s).split()) for s in sentences) / len(
             sentences
         )
         if 5 <= avg_sentence_length <= 25:  # Reasonable sentence length
@@ -364,7 +376,7 @@ class FixedSizeChunker(ChunkingStrategy):
                             if boundary is not None:
                                 end = search_start + boundary
 
-            chunk_text = text[start:end].strip()
+            chunk_text = safe_strip(text[start:end])
 
             if chunk_text:
                 chunk = {
@@ -438,7 +450,7 @@ class TokenBasedChunker(ChunkingStrategy):
                 else:
                     chunk_text = self.token_counter.tokenizer.decode(chunk_tokens)
 
-                if chunk_text.strip():
+                if safe_strip(chunk_text):
                     chunk = {
                         "text": chunk_text,
                         "chunk_index": chunk_index,
@@ -498,7 +510,7 @@ class TokenBasedChunker(ChunkingStrategy):
                 chunk_text = text[text_start_pos:text_end_pos]
                 chunk_words = [wp["word"] for wp in word_positions[start_word:end_word]]
 
-                if chunk_text.strip():
+                if safe_strip(chunk_text):
                     estimated_tokens = int(len(chunk_words) * approx_tokens_per_word)
 
                     chunk = {
@@ -541,7 +553,7 @@ class SemanticChunker(ChunkingStrategy):
         for paragraph in paragraphs:
             # If adding this paragraph would exceed chunk size, finalize current chunk
             if current_chunk and len(current_chunk) + len(paragraph) > self.chunk_size:
-                trimmed_text = current_chunk.strip()
+                trimmed_text = safe_strip(current_chunk)
                 if trimmed_text:
                     chunk = {
                         "text": trimmed_text,
@@ -576,7 +588,7 @@ class SemanticChunker(ChunkingStrategy):
                 current_chunk += paragraph
 
         # Add final chunk
-        trimmed_text = current_chunk.strip()
+        trimmed_text = safe_strip(current_chunk)
         if trimmed_text:
             chunk = {
                 "text": trimmed_text,
@@ -623,12 +635,12 @@ class SemanticChunker(ChunkingStrategy):
 
         # Simple sentence splitting
         sentences = re.split(r"[.!?]+\s+", text)
-        return [s.strip() for s in sentences if s.strip()]
+        return [safe_strip(s) for s in sentences if safe_strip(s)]
 
     def split_on_paragraphs(self, text: str) -> list[str]:
         """Split text on paragraph boundaries."""
         paragraphs = text.split("\n\n")
-        return [p.strip() for p in paragraphs if p.strip()]
+        return [safe_strip(p) for p in paragraphs if safe_strip(p)]
 
 
 class AdaptiveChunker(ChunkingStrategy):
@@ -704,7 +716,7 @@ class AdaptiveChunker(ChunkingStrategy):
 
         for i, line in enumerate(lines):
             # Check if we're starting a new function/class and current chunk is getting large
-            trimmed_text = current_chunk.strip()
+            trimmed_text = safe_strip(current_chunk)
             if (
                 any(keyword in line for keyword in ["def ", "class ", "function "])
                 and len(current_chunk) > self.chunk_size * 0.8
@@ -736,7 +748,7 @@ class AdaptiveChunker(ChunkingStrategy):
             current_chunk += line + "\n"
 
             # Force split if chunk gets too large
-            trimmed_text = current_chunk.strip()
+            trimmed_text = safe_strip(current_chunk)
             if len(current_chunk) > self.chunk_size * 1.5 and trimmed_text:
                 chunk = {
                     "text": trimmed_text,
@@ -764,7 +776,7 @@ class AdaptiveChunker(ChunkingStrategy):
                 )
 
         # Add final chunk
-        trimmed_text = current_chunk.strip()
+        trimmed_text = safe_strip(current_chunk)
         if trimmed_text:
             chunk = {
                 "text": trimmed_text,

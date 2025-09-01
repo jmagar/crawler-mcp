@@ -143,7 +143,12 @@ class EmbeddingWorker:
 
             for text in texts:
                 # Generate stable hash of normalized text content
-                normalized_text = text.strip().lower()
+                # Safely handle text that might be a list
+                if isinstance(text, list):
+                    text_str = "\n".join(str(item) for item in text)
+                else:
+                    text_str = str(text)
+                normalized_text = text_str.strip().lower()
                 text_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
                 text_hashes.append(text_hash)
 

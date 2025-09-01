@@ -1,4 +1,6 @@
 # Python
+data/
+.playwright-mcp
 __pycache__/
 *.py[cod]
 *$py.class
@@ -79,6 +81,12 @@ crawl_data/
 downloads/
 repositories/
 cloned_repos/
+
+# Crawl artifacts (large, generated)
+crawl.html
+crawl_all.html
+pages.ndjson
+report.json
 
 # Data directory contents (but keep structure)
 data/logs/

@@ -47,9 +47,15 @@ class PageContent(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
-    _validate_word_count = field_validator("word_count", mode="before")(
-        calculate_word_count_validator
-    )
+    @field_validator("word_count", mode="before")
+    @classmethod
+    def validate_word_count(cls, v: int, info: Any) -> int:
+        """Calculate word count from content if not provided."""
+        if v == 0 and info.data and "content" in info.data:
+            content = info.data["content"]
+            if content and isinstance(content, str):
+                return len(content.split())
+        return v
 
 
 class CrawlRequest(BaseModel):
@@ -94,7 +100,8 @@ class CrawlRequest(BaseModel):
         description="Minimum words required for content blocks",
     )
     prefer_fit_markdown: bool | None = Field(
-        default=None, description="Prefer filtered fit_markdown over raw_markdown (None = use global setting)"
+        default=None,
+        description="Prefer filtered fit_markdown over raw_markdown (None = use global setting)",
     )
 
     @field_validator("url")

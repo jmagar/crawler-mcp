@@ -53,7 +53,7 @@ class QueryCache:
     ) -> str:
         """Generate a deterministic cache key from query parameters."""
         key_components = [
-            query.strip().lower(),
+            str(query).strip().lower(),
             str(limit),
             str(min_score),
             str(sorted(source_filters) if source_filters else ""),

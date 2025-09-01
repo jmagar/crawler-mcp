@@ -38,8 +38,12 @@ class DocumentChunk(BaseModel):
 
     # Crawl provenance tracking
     seed_url: str | None = None  # Original URL that initiated the crawl
-    crawl_session_id: str | None = None  # Unique ID linking all documents from same crawl
-    discovery_method: str | None = None  # How this URL was found: "seed", "sitemap", "link_following", "manual"
+    crawl_session_id: str | None = (
+        None  # Unique ID linking all documents from same crawl
+    )
+    discovery_method: str | None = (
+        None  # How this URL was found: "seed", "sitemap", "link_following", "manual"
+    )
 
     _validate_word_count = field_validator("word_count", mode="before")(
         calculate_word_count_validator

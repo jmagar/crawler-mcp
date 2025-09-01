@@ -10,7 +10,8 @@ from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
 from ..config import settings
-from ..core import CrawlerService, RagService
+from ..core import RagService
+from ..core.orchestrator import CrawlerService
 from ..middleware.progress import progress_middleware
 from ..models.crawl import CrawlRequest, CrawlResult, CrawlStatus
 from ..models.sources import SourceType
@@ -179,8 +180,8 @@ def _process_crawl_result_unified(
             "sample_pages": [],
         }
 
-        # Add sample page information
-        for page in crawl_result.pages[:5]:
+        # Add sample page information (limited to 3 to reduce response size)
+        for page in crawl_result.pages[:3]:
             result["sample_pages"].append(
                 {
                     "url": page.url,
@@ -711,6 +712,18 @@ def register_crawling_tools(mcp: FastMCP) -> None:
             await ctx.info(
                 f"Crawl completed successfully: {items_count} items in {duration:.1f}s"
             )
+
+            # Limit response size to prevent MCP timeouts
+            # Keep only essential information and limit sample pages to 3
+            if "sample_pages" in result and len(result["sample_pages"]) > 3:
+                result["sample_pages"] = result["sample_pages"][:3]
+
+            # Limit error messages to prevent large responses
+            if "errors" in result and len(result["errors"]) > 5:
+                result["errors"] = result["errors"][:5]
+                result["errors"].append(
+                    f"... and {len(result.get('errors', [])) - 5} more errors"
+                )
 
             return result
 

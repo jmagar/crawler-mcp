@@ -30,7 +30,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     handlers=[
-        logging.FileHandler("/app/logs/webhook_server.log"),
+        logging.FileHandler("./logs/webhook_server.log"),
         logging.StreamHandler(),
     ],
 )

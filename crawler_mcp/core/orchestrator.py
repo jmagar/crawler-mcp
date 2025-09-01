@@ -260,13 +260,13 @@ class CrawlerService(AsyncServiceBase):
                         min_word_threshold=3,  # Keep even short text
                     )
             else:
-                # Default balanced strategy
+                # FIXED: More conservative default strategy for better content extraction
                 content_filter = None
                 if PruningContentFilter is not None:
                     content_filter = PruningContentFilter(
-                        threshold=0.45,  # Prune nodes below 45% relevance score
+                        threshold=0.25,  # REDUCED from 0.45 to 0.25 - keep 75% of content
                         threshold_type="dynamic",  # Dynamic scoring
-                        min_word_threshold=5,  # Ignore very short text blocks
+                        min_word_threshold=3,  # REDUCED from 5 to 3 - keep shorter text blocks
                     )
 
             # Create markdown generator with content filter
@@ -283,12 +283,8 @@ class CrawlerService(AsyncServiceBase):
                 "process_iframes": False,  # Disable for performance
                 "remove_overlay_elements": settings.crawl_remove_overlays,
                 "word_count_threshold": settings.crawl_min_words,
-                # Optimize for clean markdown extraction
+                # FIXED: Reduced excluded tags - only exclude script/style, keep nav/footer/header/aside
                 "excluded_tags": [
-                    "nav",
-                    "footer",
-                    "header",
-                    "aside",
                     "script",
                     "style",
                 ],
@@ -342,69 +338,44 @@ class CrawlerService(AsyncServiceBase):
             best_content = ""
             if result.markdown:
                 try:
-                    # Check if result.markdown is an integer (hash ID issue)
-                    if isinstance(result.markdown, int):
-                        self.logger.warning(
-                            f"Detected integer markdown ({result.markdown}) for {url}, using empty content"
-                        )
-                        best_content = ""
+                    # Extract markdown content following crawl4ai best practices
+                    if (
+                        hasattr(result.markdown, "fit_markdown")
+                        and result.markdown.fit_markdown
+                    ):
+                        best_content = result.markdown.fit_markdown.strip()
+                    elif (
+                        hasattr(result.markdown, "raw_markdown")
+                        and result.markdown.raw_markdown
+                    ):
+                        best_content = result.markdown.raw_markdown.strip()
                     else:
-                        # First try fit_markdown (filtered content) if available
-                        if (
-                            hasattr(result.markdown, "fit_markdown")
-                            and result.markdown.fit_markdown
-                        ):
-                            content = result.markdown.fit_markdown.strip()
-                            if len(content) > 16:  # Avoid hash placeholders
-                                best_content = content
-                        # Fall back to raw_markdown (full content)
-                        elif (
-                            hasattr(result.markdown, "raw_markdown")
-                            and result.markdown.raw_markdown
-                        ):
-                            content = result.markdown.raw_markdown.strip()
-                            if len(content) > 16:  # Avoid hash placeholders
-                                best_content = content
-                        else:
-                            best_content = ""
-                except (AttributeError, TypeError) as e:
-                    if "'int' object has no attribute" in str(e):
-                        self.logger.warning(
-                            f"Caught integer markdown issue for {url}, using empty content"
-                        )
-                        best_content = ""
-                    else:
-                        self.logger.warning(
-                            f"Failed to extract markdown content for {url}: {e}"
-                        )
                         best_content = ""
                 except Exception as e:
-                    self.logger.warning(
+                    self.logger.debug(
                         f"Failed to extract markdown content for {url}: {e}"
                     )
                     best_content = ""
 
-            # Validate content - ensure we didn't get object representations
-            if best_content:
-                object_indicators = [
-                    "CrawlResultContainer(",
-                    "CrawlResult(",
-                    "<property object at",
-                    "__dict__",
-                    "object at 0x",
-                    "MarkdownGenerationResult(",
-                ]
+            # Basic content validation
+            if best_content and len(best_content.strip()) < 3:
+                self.logger.debug(
+                    f"Content too short for {url} (less than 3 chars), clearing"
+                )
+                best_content = ""
 
-                if any(indicator in best_content for indicator in object_indicators):
-                    self.logger.warning(
-                        f"Detected object representation in content for {url}, clearing"
-                    )
-                    best_content = ""
+            # Simple fallback if markdown extraction failed
+            if not best_content and hasattr(result, "text") and result.text:
+                best_content = str(result.text).strip()
+                self.logger.debug(f"Using text fallback for {url}")
 
-                # Validate content quality - avoid storing trivial content
-                if best_content and len(best_content.strip()) < 10:
-                    self.logger.debug(f"Content too short for {url}, clearing")
-                    best_content = ""
+            if (
+                not best_content
+                and hasattr(result, "cleaned_text")
+                and result.cleaned_text
+            ):
+                best_content = str(result.cleaned_text).strip()
+                self.logger.debug(f"Using cleaned_text fallback for {url}")
 
             # Create PageContent with validated content
             page_content = PageContent(
@@ -413,6 +384,7 @@ class CrawlerService(AsyncServiceBase):
                 content=best_content,
                 html=result.html,
                 markdown=best_content,  # Use the validated content as markdown
+                word_count=0,  # Will be calculated by validator from content
                 links=[
                     link.get("href", link) if isinstance(link, dict) else link
                     for link in result.links.get("internal", [])
