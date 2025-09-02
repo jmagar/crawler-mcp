@@ -966,6 +966,8 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
             c_user = (c.get("user", {}) or {}).get("login", "")
             path = c.get("path", "")
             line_no = c.get("line") or c.get("original_line") or ""
+            start_line = c.get("start_line") or c.get("original_start_line") or None
+            end_line = c.get("end_line") or c.get("original_end_line") or None
             created = c.get("created_at", "")
             body_c = c.get("body", "") or ""
             comment_id = c.get("id")
@@ -1003,6 +1005,8 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                         "comment_id": comment_id,
                         "path": path,
                         "line": line_no,
+                        "start_line": start_line,
+                        "end_line": end_line,
                         "created_at": created,
                     },
                 )

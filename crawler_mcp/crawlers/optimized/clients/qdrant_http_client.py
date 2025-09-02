@@ -159,6 +159,26 @@ class QdrantClient:
             r.raise_for_status()
             return await r.json()
 
+    async def set_payload(
+        self,
+        name: str,
+        *,
+        payload: dict[str, Any],
+        ids: list[str] | None = None,
+        timeout_s: float | None = None,
+    ) -> dict[str, Any]:
+        """Set payload values for points by IDs."""
+        body: dict[str, Any] = {"payload": payload}
+        if ids:
+            body["points"] = ids
+        sess = await self._get_session(timeout_s)
+        async with sess.put(
+            f"{self.base_url}/collections/{name}/points/payload",
+            json=body,
+        ) as r:
+            r.raise_for_status()
+            return await r.json()
+
     async def _get_session(
         self, timeout_s: float | None = None
     ) -> aiohttp.ClientSession:

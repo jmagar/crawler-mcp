@@ -237,6 +237,55 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Filter search by PR number (payload.pr_number)",
     )
+    p.add_argument(
+        "--search-item-type",
+        default=None,
+        help="Filter by item_type (e.g., pr_review_comment)",
+    )
+    p.add_argument("--search-author", default=None, help="Filter by author login")
+    p.add_argument(
+        "--search-path", default=None, help="Filter by file path (exact match)"
+    )
+    p.add_argument("--search-state", default=None, help="Filter by review_state")
+    p.add_argument(
+        "--search-resolved", default=None, help="Filter by resolved flag: true|false"
+    )
+    # Utilities
+    p.add_argument(
+        "--get-file-context",
+        default=None,
+        help="Return file snippet; use with --context-start/--context-end",
+    )
+    p.add_argument(
+        "--context-start", type=int, default=1, help="Start line for --get-file-context"
+    )
+    p.add_argument(
+        "--context-end", type=int, default=1, help="End line for --get-file-context"
+    )
+    p.add_argument(
+        "--apply-suggestions",
+        default=None,
+        choices=["dry-run", "commit"],
+        help="Apply suggestions from --items-ndjson",
+    )
+    p.add_argument(
+        "--items-ndjson",
+        default=None,
+        help="Path to NDJSON items produced by --output-ndjson",
+    )
+    p.add_argument(
+        "--only-authors",
+        default=None,
+        help="Comma-separated list of authors to include",
+    )
+    p.add_argument(
+        "--only-item-types", default=None, help="Comma-separated item types to include"
+    )
+    p.add_argument(
+        "--only-paths",
+        default=None,
+        help="Comma-separated file paths to include (exact)",
+    )
     # Rerank
     p.add_argument(
         "--rerank", type=_bool, default=None, help="Enable reranking of search results"
@@ -487,22 +536,37 @@ async def _run(args: argparse.Namespace) -> int:
             print("Failed to embed query", flush=True)
             return 1
         qvec = vecs[0]
-        # Optional structured filter on owner/repo/pr_number
+        # Optional structured filter on owner/repo/pr_number + extra fields
         qfilter = None
-        if args.search_owner or args.search_repo or (args.search_pr is not None):
-            must = []
-            if args.search_owner:
-                must.append(
-                    {"key": "owner", "match": {"value": str(args.search_owner)}}
-                )
-            if args.search_repo:
-                must.append({"key": "repo", "match": {"value": str(args.search_repo)}})
-            if args.search_pr is not None:
-                must.append(
-                    {"key": "pr_number", "match": {"value": int(args.search_pr)}}
-                )
-            if must:
-                qfilter = {"must": must}
+        must = []
+        if args.search_owner:
+            must.append({"key": "owner", "match": {"value": str(args.search_owner)}})
+        if args.search_repo:
+            must.append({"key": "repo", "match": {"value": str(args.search_repo)}})
+        if args.search_pr is not None:
+            must.append({"key": "pr_number", "match": {"value": int(args.search_pr)}})
+        if args.search_item_type:
+            must.append(
+                {"key": "item_type", "match": {"value": str(args.search_item_type)}}
+            )
+        if args.search_author:
+            must.append({"key": "author", "match": {"value": str(args.search_author)}})
+        if args.search_path:
+            must.append({"key": "path", "match": {"value": str(args.search_path)}})
+        if args.search_state:
+            must.append(
+                {"key": "review_state", "match": {"value": str(args.search_state)}}
+            )
+        if args.search_resolved is not None:
+            val = str(args.search_resolved).strip().lower() in {
+                "1",
+                "true",
+                "yes",
+                "on",
+            }
+            must.append({"key": "resolved", "match": {"value": bool(val)}})
+        if must:
+            qfilter = {"must": must}
 
         async with QdrantClient(
             cfg.qdrant_url, api_key=cfg.qdrant_api_key, timeout_s=15.0
@@ -584,6 +648,132 @@ async def _run(args: argparse.Namespace) -> int:
             para = _pick_paragraph(str(payload.get("text", "")))
             score = h.get("score", 0)
             print(f"{i}. [{score:.4f}] {title}\n   {url}\n   {para[:400]}\n")
+        return 0
+
+    # Subcommand: get file context
+    if getattr(args, "get_file_context", None):
+        path = str(args.get_file_context)
+        start = int(getattr(args, "context_start", 1) or 1)
+        end = int(getattr(args, "context_end", start) or start)
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = f.read().splitlines()
+            s = max(1, start)
+            e = max(s, end)
+            snippet = "\n".join(lines[s - 1 : e])
+            print(snippet)
+            return 0
+        except Exception as e:
+            print(f"Failed to read file context: {e}")
+            return 1
+
+    # Subcommand: apply suggestions from NDJSON items
+    if getattr(args, "apply_suggestions", None):
+        mode = str(args.apply_suggestions).lower()
+        items_path = str(getattr(args, "items_ndjson", "") or "")
+        if not items_path:
+            print("--items-ndjson is required for --apply-suggestions", flush=True)
+            return 2
+        # Filters
+        only_authors = {
+            s.strip()
+            for s in (getattr(args, "only_authors", "") or "").split(",")
+            if s.strip()
+        }
+        only_types = {
+            s.strip()
+            for s in (getattr(args, "only_item_types", "") or "").split(",")
+            if s.strip()
+        }
+        only_paths = {
+            s.strip()
+            for s in (getattr(args, "only_paths", "") or "").split(",")
+            if s.strip()
+        }
+        import json as _json
+
+        from .utils.github_suggestions import (
+            apply_suggestion as _apply_sugg,
+        )
+        from .utils.github_suggestions import (
+            extract_suggestions,
+        )
+        from .utils.github_suggestions import (
+            unified_diff as _udiff,
+        )
+
+        changes: list[tuple[str, str, str]] = []  # (path, before, after)
+        try:
+            with open(items_path, encoding="utf-8") as f:
+                for line in f:
+                    try:
+                        item = _json.loads(line)
+                    except Exception:
+                        continue
+                    md = item.get("metadata") or {}
+                    itype = str(md.get("item_type", ""))
+                    if only_types and itype not in only_types:
+                        continue
+                    author = str(md.get("author", ""))
+                    if only_authors and author not in only_authors:
+                        continue
+                    path = str(md.get("path", ""))
+                    if only_paths and path and (path not in only_paths):
+                        continue
+                    content = str(item.get("content", ""))
+                    suggs = extract_suggestions(content)
+                    if not suggs:
+                        continue
+                    if not path:
+                        continue  # cannot apply without path
+                    start_line = int(md.get("start_line") or md.get("line") or 1)
+                    end_line = int(md.get("end_line") or md.get("line") or start_line)
+                    try:
+                        with open(path, encoding="utf-8") as _f:
+                            before = _f.read()
+                    except Exception:
+                        continue
+                    after = before
+                    for s in suggs:
+                        after = _apply_sugg(
+                            after,
+                            start_line=start_line,
+                            end_line=end_line,
+                            suggestion_text=s.content,
+                        )
+                    if after != before:
+                        changes.append((path, before, after))
+        except Exception as e:
+            print(f"Failed to read items: {e}")
+            return 1
+        if not changes:
+            print("No applicable suggestions found.")
+            return 0
+        # Report diff or write files
+        total_changed = 0
+        for path, before, after in changes:
+            diff = _udiff(path, before, after)
+            if mode == "dry-run":
+                print(diff)
+            elif mode == "commit":
+                try:
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write(after)
+                    total_changed += 1
+                except Exception as e:
+                    print(f"Failed to write {path}: {e}")
+        if mode == "commit" and total_changed:
+            # Stage and commit
+            try:
+                import subprocess as sp
+
+                sp.run(["git", "add", "-A"], check=False)
+                sp.run(
+                    ["git", "commit", "-m", "chore: apply GitHub review suggestions"],
+                    check=False,
+                )
+            except Exception:
+                pass
         return 0
 
     # Resolve progress preference from env if flag not passed
