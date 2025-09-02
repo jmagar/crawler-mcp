@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import contextlib
 import fnmatch
+import json
 import os
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from fastmcp import Context, FastMCP
 
 from ..crawlers.optimized.clients.github_client import GitHubClient
+from ..crawlers.optimized.clients.qdrant_http_client import QdrantClient
 from ..crawlers.optimized.utils.github_suggestions import (
     apply_suggestion as _apply_sugg,
 )
@@ -181,6 +185,23 @@ def _apply_filters(
 
 
 def register_github_pr_tools(mcp: FastMCP) -> None:
+    # Local registry file for resolved tracking
+    REGISTRY = Path(".pr_resolved_registry.json")
+
+    def _load_registry() -> dict[str, Any]:
+        try:
+            if REGISTRY.exists():
+                return json.loads(REGISTRY.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return {}
+
+    def _save_registry(data: dict[str, Any]) -> None:
+        with contextlib.suppress(Exception):
+            REGISTRY.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+
     @mcp.tool
     async def list_pr_items(
         ctx: Context,
@@ -201,6 +222,12 @@ def register_github_pr_tools(mcp: FastMCP) -> None:
           - after/before: ISO timestamps
         """
         items = await list_pr_items_impl(owner, repo, pr_number)
+        # Merge local resolved registry flags
+        reg = _load_registry().get(f"{owner}/{repo}#{pr_number}", {})
+        for it in items:
+            iid = str(it.get("item_id") or it.get("canonical_url") or "")
+            if iid and iid in reg:
+                it["is_resolved"] = bool(reg.get(iid))
         return _apply_filters(items, filters)
 
     @mcp.tool
@@ -212,16 +239,52 @@ def register_github_pr_tools(mcp: FastMCP) -> None:
         path: str,
         start_line: int,
         end_line: int,
+        commit_id: str | None = None,
+        original_commit_id: str | None = None,
     ) -> dict[str, Any]:
-        """Return file snippet from GitHub at ref (inclusive lines)."""
+        """Return file snippet from GitHub at ref (inclusive lines). If commit ids provided,
+        also includes head/base snippets for review context."""
         token = os.getenv("GITHUB_TOKEN", "")
         async with GitHubClient(token=token, timeout_s=30.0) as gh:
             _, content = await gh.get_file_content(owner, repo, path, ref)
+            head_snip = base_snip = ""
+            s = max(1, int(start_line))
+            e = max(s, int(end_line))
+            if commit_id:
+                try:
+                    _, head_text = await gh.get_file_content(
+                        owner, repo, path, commit_id
+                    )
+                    head_snip = "\n".join(head_text.splitlines()[s - 1 : e])
+                except Exception:
+                    head_snip = ""
+            if original_commit_id:
+                try:
+                    _, base_text = await gh.get_file_content(
+                        owner, repo, path, original_commit_id
+                    )
+                    base_snip = "\n".join(base_text.splitlines()[s - 1 : e])
+                except Exception:
+                    base_snip = ""
         lines = content.splitlines()
-        s = max(1, int(start_line))
-        e = max(s, int(end_line))
         snippet = "\n".join(lines[s - 1 : e])
-        return {"path": path, "ref": ref, "start": s, "end": e, "snippet": snippet}
+        out: dict[str, Any] = {
+            "path": path,
+            "ref": ref,
+            "start": s,
+            "end": e,
+            "snippet": snippet,
+        }
+        if head_snip or base_snip:
+            out.update(
+                {
+                    "commit_id": commit_id,
+                    "original_commit_id": original_commit_id,
+                    "head_snippet": head_snip,
+                    "base_snippet": base_snip,
+                }
+            )
+        return out
 
     @mcp.tool
     async def apply_suggestions(
@@ -230,6 +293,9 @@ def register_github_pr_tools(mcp: FastMCP) -> None:
         repo: str,
         pr_number: int,
         strategy: str = "dry-run",
+        include_bots: bool = True,
+        include_humans: bool = True,
+        only_unresolved: bool = False,
     ) -> dict[str, Any]:
         """Parse and apply GitHub ```suggestion blocks from review comments.
 
@@ -237,9 +303,22 @@ def register_github_pr_tools(mcp: FastMCP) -> None:
         Requires local working copy of the repository for commit mode.
         """
         items = await list_pr_items_impl(owner, repo, pr_number)
+        reg = _load_registry().get(f"{owner}/{repo}#{pr_number}", {})
         changes: list[dict[str, Any]] = []
         for it in items:
             if it.get("item_type") != "pr_review_comment":
+                continue
+            author = str(it.get("author", "")).lower()
+            is_bot = (
+                author.endswith("[bot]")
+                or ("copilot" in author)
+                or ("coderabbit" in author)
+            )
+            if (not include_bots and is_bot) or (not include_humans and not is_bot):
+                continue
+            if only_unresolved and bool(
+                it.get("is_resolved", False) or reg.get(str(it.get("item_id")), False)
+            ):
                 continue
             path = str(it.get("path", ""))
             if not path:
@@ -285,6 +364,82 @@ def register_github_pr_tools(mcp: FastMCP) -> None:
             except Exception:
                 pass
         return {"applied": strategy == "commit", "changes": changes}
+
+    @mcp.tool
+    async def mark_items_resolved(
+        ctx: Context,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        resolved: bool = True,
+        filters: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Mark items as resolved/unchecked in local registry and attempt to update Qdrant payload.
+
+        Filters: authors, bots, item_types, file_globs, min_length, after/before.
+        """
+        items = await list_pr_items_impl(owner, repo, pr_number)
+        items = _apply_filters(items, filters)
+        reg_all = _load_registry()
+        key = f"{owner}/{repo}#{pr_number}"
+        reg = reg_all.get(key, {})
+        updated = 0
+        for it in items:
+            iid = str(it.get("item_id") or it.get("canonical_url") or "")
+            if not iid:
+                continue
+            reg[iid] = bool(resolved)
+            updated += 1
+        reg_all[key] = reg
+        _save_registry(reg_all)
+
+        # Best-effort Qdrant payload update (requires env vars)
+        try:
+            qurl = os.getenv("OPTIMIZED_CRAWLER_QDRANT_URL") or os.getenv("QDRANT_URL")
+            qcol = os.getenv("OPTIMIZED_CRAWLER_QDRANT_COLLECTION") or os.getenv(
+                "QDRANT_COLLECTION"
+            )
+            qkey = os.getenv("OPTIMIZED_CRAWLER_QDRANT_API_KEY") or os.getenv(
+                "QDRANT_API_KEY"
+            )
+            if qurl and qcol:
+                async with QdrantClient(qurl, api_key=qkey, timeout_s=10.0) as qc:
+                    # Construct filter for owner/repo/pr and optional item_types
+                    must = [
+                        {"key": "owner", "match": {"value": owner}},
+                        {"key": "repo", "match": {"value": repo}},
+                        {"key": "pr_number", "match": {"value": int(pr_number)}},
+                    ]
+                    if filters and filters.get("item_types"):
+                        # build should for any item_types
+                        should = [
+                            {"key": "item_type", "match": {"value": t}}
+                            for t in (filters.get("item_types") or [])
+                        ]
+                        qf = {"must": must, "should": should, "minimum_should_match": 1}
+                    else:
+                        qf = {"must": must}
+                    data = await qc.scroll_points(
+                        qcol,
+                        limit=10000,
+                        with_vectors=False,
+                        with_payload=False,
+                        query_filter=qf,
+                    )
+                    pts = (
+                        (data.get("result", {}) or {}).get("points", [])
+                        if isinstance(data, dict)
+                        else []
+                    )
+                    ids = [p.get("id") for p in pts if p.get("id") is not None]
+                    if ids:
+                        await qc.set_payload(
+                            qcol, payload={"resolved": bool(resolved)}, ids=ids
+                        )
+        except Exception:
+            pass
+
+        return {"updated": updated, "resolved": bool(resolved)}
 
     @mcp.tool
     async def create_branch_from_pr(
