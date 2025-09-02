@@ -46,6 +46,7 @@ try:
     from .core import EmbeddingService, RagService, VectorService
     from .core.logging import get_logger
     from .tools.crawling import register_crawling_tools
+    from .tools.github_pr_tools import register_github_pr_tools
     from .tools.rag import register_rag_tools
 except ImportError:
     # Handle case when run as standalone script
@@ -128,6 +129,7 @@ mcp: FastMCP = FastMCP("crawler-mcp")
 # Register all tools
 register_crawling_tools(mcp)
 register_rag_tools(mcp)
+register_github_pr_tools(mcp)
 
 logger.info("Registered all FastMCP tools")
 

@@ -113,3 +113,30 @@ class GitHubClient:
     ) -> list[dict[str, Any]]:
         """List files changed in a pull request."""
         return await self._paginate(f"/repos/{owner}/{repo}/pulls/{number}/files")
+
+    async def get_file_content(
+        self, owner: str, repo: str, path: str, ref: str
+    ) -> tuple[str, str]:
+        """Get file content at a specific ref. Returns (encoding, content_str)."""
+        data = await self._get_json(
+            f"/repos/{owner}/{repo}/contents/{path}", params={"ref": ref}
+        )
+        import base64
+
+        enc = str(data.get("encoding", ""))
+        if enc == "base64":
+            raw = base64.b64decode(data.get("content", "") or b"")
+            return enc, raw.decode("utf-8", errors="replace")
+        return enc, str(data.get("content", "") or "")
+
+    async def post_issue_comment(
+        self, owner: str, repo: str, number: int, body: str
+    ) -> dict[str, Any]:
+        await self._ensure_session()
+        assert self._session is not None
+        url = f"{self.base_url}/repos/{owner}/{repo}/issues/{number}/comments"
+        async with self._session.post(url, json={"body": body}) as resp:
+            if resp.status >= 400:
+                text = await resp.text()
+                raise RuntimeError(f"GitHub API error {resp.status}: {text[:200]}")
+            return await resp.json()
