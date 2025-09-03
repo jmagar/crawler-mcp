@@ -218,5 +218,11 @@ dev = [
     "types-psutil>=7.0.0.20250822",
     "types-python-dateutil>=2.9.0.20250822",
 ]
+test = [
+    "pytest>=8.4.1",
+    "pytest-asyncio>=1.1.0",
+    "pytest-cov>=6.2.1",
+    "pytest-rerunfailures>=15.1",
+]
 
 # Dependency groups removed - use project.optional-dependencies instead

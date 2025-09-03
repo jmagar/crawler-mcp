@@ -10,15 +10,15 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 
-from ..crawlers.optimized.clients.github_client import GitHubClient
-from ..crawlers.optimized.clients.qdrant_http_client import QdrantClient
-from ..crawlers.optimized.utils.github_suggestions import (
+from ..clients.github_client import GitHubClient
+from ..clients.qdrant_http_client import QdrantClient
+from ..utils.github_suggestions import (
     apply_suggestion as _apply_sugg,
 )
-from ..crawlers.optimized.utils.github_suggestions import (
+from ..utils.github_suggestions import (
     extract_suggestions,
 )
-from ..crawlers.optimized.utils.github_suggestions import (
+from ..utils.github_suggestions import (
     unified_diff as _udiff,
 )
 

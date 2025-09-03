@@ -88,6 +88,9 @@ crawl_all.html
 pages.ndjson
 report.json
 
+# Structured output directory
+output/
+
 # Data directory contents (but keep structure)
 data/logs/
 data/data/

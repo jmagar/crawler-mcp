@@ -254,6 +254,28 @@ class OptimizedConfig:
     follow_internal_budget: int = 200
     """Max number of internal links to enqueue in the follow-up pass."""
 
+    # Output Management Configuration
+    output_dir: str = "./output"
+    """Base output directory for all crawl results and reports"""
+
+    max_domain_backups: int = 1
+    """Number of backup copies to keep per domain (latest + N backups)"""
+
+    max_output_size_gb: float = 1.0
+    """Maximum total size of output directory in GB before cleanup"""
+
+    log_rotation_size_mb: int = 10
+    """Log file rotation size in MB"""
+
+    log_rotation_backups: int = 3
+    """Number of rotated log backups to keep (.1, .2, .3)"""
+
+    cache_retention_hours: int = 24
+    """Cache file retention time in hours"""
+
+    auto_cleanup: bool = True
+    """Enable automatic cleanup when size limits are exceeded"""
+
     @classmethod
     def from_env(cls, prefix: str = "OPTIMIZED_CRAWLER_") -> "OptimizedConfig":
         """
@@ -286,17 +308,17 @@ class OptimizedConfig:
             # Embeddings
             "enable_embeddings": "EMBEDDINGS",
             "tei_endpoint": "TEI_ENDPOINT",
-            "tei_model_name": "TEI_MODEL",
-            "tei_batch_size": "TEI_BATCH",
+            "tei_model_name": "TEI_MODEL_NAME",
+            "tei_batch_size": "TEI_BATCH_SIZE",
             "tei_timeout_s": "TEI_TIMEOUT_S",
-            "tei_max_retries": "TEI_RETRIES",
-            "tei_parallel_requests": "TEI_PARALLEL",
+            "tei_max_retries": "TEI_MAX_RETRIES",
+            "tei_parallel_requests": "TEI_PARALLEL_REQUESTS",
             "tei_max_input_chars": "TEI_MAX_INPUT_CHARS",
             "tei_target_chars_per_batch": "TEI_TARGET_CHARS_PER_BATCH",
-            "tei_collapse_whitespace": "TEI_COLLAPSE_WS",
+            "tei_collapse_whitespace": "TEI_COLLAPSE_WHITESPACE",
             "tei_max_batch_tokens": "TEI_MAX_BATCH_TOKENS",
-            "tei_max_client_batch_size": "TEI_MAX_CLIENT_BATCH",
-            "tei_max_concurrent_requests": "TEI_MAX_CONCURRENT",
+            "tei_max_client_batch_size": "TEI_MAX_CLIENT_BATCH_SIZE",
+            "tei_max_concurrent_requests": "TEI_MAX_CONCURRENT_REQUESTS",
             "tei_chars_per_token": "TEI_CHARS_PER_TOKEN",
             # Rerank
             "enable_rerank": "RERANK",
@@ -311,9 +333,9 @@ class OptimizedConfig:
             "qdrant_collection": "QDRANT_COLLECTION",
             "qdrant_distance": "QDRANT_DISTANCE",
             "qdrant_vectors_name": "QDRANT_VECTORS_NAME",
-            "qdrant_batch_size": "QDRANT_BATCH",
-            "qdrant_parallel_requests": "QDRANT_PARALLEL",
-            "qdrant_upsert_wait": "QDRANT_WAIT",
+            "qdrant_batch_size": "QDRANT_BATCH_SIZE",
+            "qdrant_parallel_requests": "QDRANT_PARALLEL_REQUESTS",
+            "qdrant_upsert_wait": "QDRANT_UPSERT_WAIT",
             "qdrant_api_key": "QDRANT_API_KEY",
             "qdrant_vector_size": "QDRANT_VECTOR_SIZE",
             # Enhanced sitemap options
@@ -325,6 +347,14 @@ class OptimizedConfig:
             "sitemap_user_agent": "SITEMAP_USER_AGENT",
             "fallback_min_quality_ratio": "FALLBACK_MIN_QUALITY_RATIO",
             "fallback_absolute_minimum": "FALLBACK_ABSOLUTE_MIN",
+            # Output Management
+            "output_dir": "OUTPUT_DIR",
+            "max_domain_backups": "MAX_DOMAIN_BACKUPS",
+            "max_output_size_gb": "MAX_OUTPUT_SIZE_GB",
+            "log_rotation_size_mb": "LOG_ROTATION_SIZE_MB",
+            "log_rotation_backups": "LOG_ROTATION_BACKUPS",
+            "cache_retention_hours": "CACHE_RETENTION_HOURS",
+            "auto_cleanup": "AUTO_CLEANUP",
         }
 
         # Load configuration from environment

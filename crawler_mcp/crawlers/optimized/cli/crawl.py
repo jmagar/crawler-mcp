@@ -16,13 +16,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 import os
 import sys
 from typing import Any
 
-from . import OptimizedConfig, OptimizedCrawlerStrategy
+from .. import OptimizedConfig, OptimizedCrawlerStrategy
+from ..utils.log_manager import LogManager
+from ..utils.output_manager import OutputManager
 
 
 def _bool(x: str) -> bool:
@@ -52,19 +53,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Regex pattern to relax validation for doc-like URLs (can repeat)",
     )
     p.add_argument(
-        "--output-html",
-        default="crawl_all.html",
-        help="Path to write the combined HTML",
+        "--output-dir",
+        default="./output",
+        help="Base output directory (default: ./output)",
     )
     p.add_argument(
-        "--output-ndjson",
-        default="",
-        help="Path to write per-page NDJSON (one JSON object per line)",
+        "--no-backup",
+        action="store_true",
+        help="Skip backup rotation (overwrite previous backup)",
     )
     p.add_argument(
-        "--report-json",
-        default="",
-        help="Path to write the performance report JSON",
+        "--clean-outputs",
+        action="store_true",
+        help="Clean all outputs before starting crawl",
+    )
+    p.add_argument(
+        "--skip-output",
+        action="store_true",
+        help="Don't save outputs to disk (useful for testing)",
     )
     p.add_argument(
         "--page-timeout-ms",
@@ -183,11 +189,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         choices=["none", "truncate", "pad_zero"],
         help="Projection method when target dim set",
-    )
-    p.add_argument(
-        "--ndjson-include-embeddings",
-        action="store_true",
-        help="Include embeddings array in NDJSON output (large)",
     )
     # Qdrant
     p.add_argument("--qdrant", type=_bool, default=None, help="Enable Qdrant upsert")
@@ -425,6 +426,7 @@ async def _run(args: argparse.Namespace) -> int:
     cfg.max_concurrent_crawls = args.concurrency
     cfg.content_validation = args.content_validation
     cfg.page_timeout = int(args.page_timeout_ms)
+    cfg.output_dir = args.output_dir
     if args.doc_relax:
         cfg.doc_relax_validation_patterns = list(args.doc_relax)
 
@@ -522,9 +524,9 @@ async def _run(args: argparse.Namespace) -> int:
         except Exception:
             topk_env = 0
         topk = int(getattr(args, "search_topk", 5) or (topk_env or 5))
-        from .local_reranker import LocalReranker
-        from .qdrant_http_client import QdrantClient
-        from .tei_client import TEIEmbeddingsClient
+        from ..clients.local_reranker import LocalReranker
+        from ..clients.qdrant_http_client import QdrantClient
+        from ..clients.tei_client import TEIEmbeddingsClient
 
         async with TEIEmbeddingsClient(
             cfg.tei_endpoint,
@@ -585,7 +587,7 @@ async def _run(args: argparse.Namespace) -> int:
         # Default behavior: if not explicitly set, auto-enable rerank when CUDA is available (local reranker).
         auto_cuda = False
         try:
-            from .local_reranker import _has_cuda as _rr_has_cuda
+            from ..clients.local_reranker import _has_cuda as _rr_has_cuda
 
             auto_cuda = bool(_rr_has_cuda())
         except Exception:
@@ -692,13 +694,13 @@ async def _run(args: argparse.Namespace) -> int:
         }
         import json as _json
 
-        from .utils.github_suggestions import (
+        from ..utils.github_suggestions import (
             apply_suggestion as _apply_sugg,
         )
-        from .utils.github_suggestions import (
+        from ..utils.github_suggestions import (
             extract_suggestions,
         )
-        from .utils.github_suggestions import (
+        from ..utils.github_suggestions import (
             unified_diff as _udiff,
         )
 
@@ -790,6 +792,32 @@ async def _run(args: argparse.Namespace) -> int:
         args.progress or _env_bool("OPTIMIZED_CRAWLER_PROGRESS", False)
     )
 
+    # Initialize output and log managers
+    output_mgr = OutputManager(args.output_dir, cfg)
+    log_mgr = LogManager(os.path.join(args.output_dir, "logs"))
+
+    # Setup logging
+    crawl_logger = log_mgr.setup_crawl_logger()
+    error_logger = log_mgr.setup_error_logger()
+    console_logger = log_mgr.setup_console_logger()
+
+    # Clean outputs if requested
+    if args.clean_outputs:
+        console_logger.info("Cleaning output directory...")
+        output_mgr.cleanup_old_outputs()
+        output_mgr.clean_cache()
+
+    # Get domain for output management
+    domain = output_mgr.sanitize_domain(args.url)
+
+    # Rotate backup before crawl (unless --no-backup)
+    if not args.no_backup:
+        output_mgr.rotate_crawl_backup(domain)
+
+    crawl_logger.info(f"Starting crawl for {args.url}")
+    crawl_logger.info(f"Output directory: {args.output_dir}")
+    crawl_logger.info(f"Domain: {domain}")
+
     strat = OptimizedCrawlerStrategy(cfg)
 
     # Optional: human-friendly per-page logs via monitoring hooks
@@ -863,20 +891,20 @@ async def _run(args: argparse.Namespace) -> int:
     await strat.start()
     try:
         # Force streaming when per-page logging is requested to reduce latency
+        crawl_logger.info(f"Beginning crawl of {args.url}")
         resp = await strat.crawl(
             args.url, stream=(args.stream or args.per_page_log or show_progress)
         )
+        crawl_logger.info("Crawl completed successfully")
 
-        # Write combined HTML
-        if args.output_html:
-            with open(args.output_html, "w", encoding="utf-8") as f:
-                f.write(resp.html or "")
+        # Save outputs using OutputManager (unless --skip-output)
+        if not args.skip_output:
+            try:
+                pages = strat.get_last_pages() or []
 
-        # Dump per-page NDJSON if requested
-        if args.output_ndjson:
-            pages = strat.get_last_pages()
-            with open(args.output_ndjson, "w", encoding="utf-8") as f:
-                for pg in pages or []:
+                # Prepare page data with embeddings if requested
+                page_data = []
+                for pg in pages:
                     obj: dict[str, Any] = {
                         "url": getattr(pg, "url", ""),
                         "title": getattr(pg, "title", ""),
@@ -886,19 +914,44 @@ async def _run(args: argparse.Namespace) -> int:
                         "metadata": getattr(pg, "metadata", {}),
                         "content": getattr(pg, "content", ""),
                     }
-                    if args.ndjson_include_embeddings:
-                        emb = (obj.get("metadata", {}) or {}).get("embedding")
-                        if emb is None:
-                            # keep explicit null to signal disabled/omitted
-                            obj["embedding"] = None
-                        else:
-                            obj["embedding"] = emb
-                    f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+                    page_data.append(obj)
+
+                # Get performance report
+                report = strat.get_performance_report() or {}
+
+                # Save all outputs
+                output_mgr.save_crawl_outputs(domain, resp.html, page_data, report)
+
+                # Update index with metadata
+                output_mgr.update_index(
+                    domain,
+                    {
+                        "url": args.url,
+                        "pages_crawled": len(page_data),
+                        "success": True,
+                        "concurrency": args.concurrency,
+                        "max_urls": args.max_urls,
+                    },
+                )
+
+                crawl_logger.info(
+                    f"Saved outputs to {args.output_dir}/crawls/{domain}/latest/"
+                )
+                console_logger.info(
+                    f"✅ Outputs saved to: {args.output_dir}/crawls/{domain}/latest/"
+                )
+
+            except Exception as e:
+                error_logger.error(f"Failed to save outputs: {e}")
+                console_logger.error(f"⚠️ Failed to save outputs: {e}")
+        else:
+            crawl_logger.info("Skipping output save (--skip-output)")
+            console_logger.info("📝 Outputs not saved (--skip-output)")
 
         # Optional: verify Qdrant contents
         if cfg.enable_qdrant and args.verify_qdrant:
             try:
-                from .qdrant_http_client import QdrantClient
+                from ..clients.qdrant_http_client import QdrantClient
 
                 qurl = cfg.qdrant_url
                 qcol = cfg.qdrant_collection
@@ -961,7 +1014,7 @@ async def _run(args: argparse.Namespace) -> int:
         # Enhanced terminal summary (factored out)
         headers = resp.response_headers or {}
         report = strat.get_performance_report() or {}
-        from .shared.reporting import print_enhanced_report
+        from ..shared.reporting import print_enhanced_report
 
         report = print_enhanced_report(args, headers, report, strat)
         # Skip legacy inline reporter below
@@ -1003,11 +1056,33 @@ async def _run(args: argparse.Namespace) -> int:
             return _sty(s, "36")
 
         # Legacy inline helpers and header parsing removed; reporting handled by shared module
-        # Optional: write JSON report
-        if args.report_json:
-            with open(args.report_json, "w", encoding="utf-8") as f:
-                json.dump(report, f, ensure_ascii=False, indent=2)
+        # JSON reports are now saved automatically by OutputManager
         return 0
+    except Exception as e:
+        error_logger.error(f"Crawl failed: {e}", exc_info=True)
+        console_logger.error(f"❌ Crawl failed: {e}")
+
+        # Try to save partial results if available
+        if not args.skip_output:
+            try:
+                pages = strat.get_last_pages() or []
+                if pages:
+                    report = strat.get_performance_report() or {}
+                    output_mgr.save_crawl_outputs(domain, None, pages, report)
+                    output_mgr.update_index(
+                        domain,
+                        {
+                            "url": args.url,
+                            "pages_crawled": len(pages),
+                            "success": False,
+                            "error": str(e),
+                        },
+                    )
+                    console_logger.info("💾 Saved partial results")
+            except Exception as save_error:
+                error_logger.error(f"Failed to save partial results: {save_error}")
+
+        return 1
     finally:
         await strat.close()
 

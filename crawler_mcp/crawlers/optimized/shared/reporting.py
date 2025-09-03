@@ -357,18 +357,14 @@ def print_enhanced_report(
         for r in recs[:5]:
             print(VAL(f"- {r}"))
 
-    # Outputs
-    out_lines = []
-    if args.output_html:
-        out_lines.append(("📄 HTML", args.output_html))
-    if args.output_ndjson:
-        out_lines.append(("🧾 NDJSON", args.output_ndjson))
-    if args.report_json:
-        out_lines.append(("📊 Report JSON", args.report_json))
-    if out_lines:
+    # Outputs - now handled by OutputManager, show output directory
+    output_dir = getattr(args, "output_dir", "./output")
+    if not getattr(args, "skip_output", False):
         print("\n" + H("📝 Outputs"))
-        for label, path in out_lines:
-            print(KEY(f"- {label}:"), VAL(path))
+        print(KEY("- 📂 Output Directory:"), VAL(output_dir))
+        print(KEY("- 📄 HTML:"), VAL("combined.html"))
+        print(KEY("- 🧾 NDJSON:"), VAL("pages.ndjson"))
+        print(KEY("- 📊 Report JSON:"), VAL("report.json"))
 
     # GitHub PR report
     try:

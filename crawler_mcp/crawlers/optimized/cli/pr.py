@@ -2,29 +2,29 @@
 CLI for GitHub PR operations tailored for LLM tooling workflows.
 
 Usage examples:
-  # List items (JSON)
-  uv run python -m crawler_mcp.crawlers.optimized.pr_cli pr-list \
+  # List items (JSON/NDJSON) - automatically saved to structured paths
+  uv run python -m crawler_mcp.crawlers.optimized.cli.pr pr-list \
     --owner OWNER --repo REPO --pr 123 --item-types pr_review_comment --only-unresolved \
-    --out items.ndjson --ndjson
+    --ndjson
 
   # Get file context
-  uv run python -m crawler_mcp.crawlers.optimized.pr_cli pr-context \
+  uv run python -m crawler_mcp.crawlers.optimized.cli.pr pr-context \
     --owner OWNER --repo REPO --ref main --path path/to/file.py --start 10 --end 40
 
   # Apply suggestions (dry-run/commit)
-  uv run python -m crawler_mcp.crawlers.optimized.pr_cli pr-apply-suggestions \
+  uv run python -m crawler_mcp.crawlers.optimized.cli.pr pr-apply-suggestions \
     --owner OWNER --repo REPO --pr 123 --strategy dry-run --only-unresolved
 
   # Create fix branch
-  uv run python -m crawler_mcp.crawlers.optimized.pr_cli pr-branch \
+  uv run python -m crawler_mcp.crawlers.optimized.cli.pr pr-branch \
     --owner OWNER --repo REPO --pr 123 --branch pr-123-fixes
 
   # Post a comment
-  uv run python -m crawler_mcp.crawlers.optimized.pr_cli pr-comment \
+  uv run python -m crawler_mcp.crawlers.optimized.cli.pr pr-comment \
     --owner OWNER --repo REPO --pr 123 --body "Applied suggestions."
 
   # Mark items resolved
-  uv run python -m crawler_mcp.crawlers.optimized.pr_cli pr-mark-resolved \
+  uv run python -m crawler_mcp.crawlers.optimized.cli.pr pr-mark-resolved \
     --owner OWNER --repo REPO --pr 123 --resolved true --item-types pr_review_comment
 """
 
@@ -34,26 +34,30 @@ import argparse
 import contextlib
 import json
 import os
-from pathlib import Path
 from typing import Any
 
-from .clients.github_client import GitHubClient
-from .clients.qdrant_http_client import QdrantClient
-from .tools.github_pr_tools import _apply_filters, list_pr_items_impl
-from .utils.github_suggestions import (
+from ..clients.github_client import GitHubClient
+from ..clients.qdrant_http_client import QdrantClient
+from ..tools.github_pr_tools import _apply_filters, list_pr_items_impl
+from ..utils.github_suggestions import (
     apply_suggestion as _apply_sugg,
 )
-from .utils.github_suggestions import (
+from ..utils.github_suggestions import (
     unified_diff as _udiff,
 )
+from ..utils.output_manager import OutputManager
 
-REGISTRY = Path(".pr_resolved_registry.json")
+
+def _get_output_manager() -> OutputManager:
+    """Get OutputManager instance with default settings."""
+    return OutputManager()
 
 
 def _load_registry() -> dict[str, Any]:
     try:
-        if REGISTRY.exists():
-            return json.loads(REGISTRY.read_text(encoding="utf-8"))
+        registry_path = _get_output_manager().get_pr_registry_path()
+        if registry_path.exists():
+            return json.loads(registry_path.read_text(encoding="utf-8"))
     except Exception:
         pass
     return {}
@@ -61,7 +65,10 @@ def _load_registry() -> dict[str, Any]:
 
 def _save_registry(data: dict[str, Any]) -> None:
     with contextlib.suppress(Exception):
-        REGISTRY.write_text(
+        registry_path = _get_output_manager().get_pr_registry_path()
+        # Ensure parent directory exists
+        registry_path.parent.mkdir(parents=True, exist_ok=True)
+        registry_path.write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
 
@@ -96,12 +103,26 @@ def cmd_pr_list(ns: argparse.Namespace) -> int:
         if iid and iid in reg:
             it["is_resolved"] = bool(reg.get(iid))
     items = _apply_filters(items, _build_filters_from_args(ns))
-    if ns.ndjson and ns.out:
-        with open(ns.out, "w", encoding="utf-8") as f:
+
+    # Always save to structured output path
+    output_mgr = _get_output_manager()
+    paths = output_mgr.get_pr_output_paths(ns.owner, ns.repo, ns.pr)
+
+    if ns.ndjson:
+        # Save as NDJSON to structured location
+        with open(paths["items"], "w", encoding="utf-8") as f:
             for it in items:
                 f.write(json.dumps(it, ensure_ascii=False) + "\n")
+        print(f"✅ Items saved to: {paths['items']}")
     else:
+        # Print to stdout and optionally save as JSON
         print(json.dumps(items, ensure_ascii=False, indent=2))
+        if len(items) > 0:  # Only save if there are items
+            json_path = paths["items"].with_suffix(".json")
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(items, f, ensure_ascii=False, indent=2)
+            print(f"✅ Items also saved to: {json_path}")
+
     return 0
 
 
@@ -200,13 +221,19 @@ def cmd_pr_apply_suggestions(ns: argparse.Namespace) -> int:
             )
         except Exception:
             pass
-    print(
-        json.dumps(
-            {"applied": ns.strategy == "commit", "changes": changes},
-            ensure_ascii=False,
-            indent=2,
-        )
-    )
+    result = {"applied": ns.strategy == "commit", "changes": changes}
+
+    # Print to stdout
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+
+    # Also save to structured path
+    output_mgr = _get_output_manager()
+    paths = output_mgr.get_pr_output_paths(ns.owner, ns.repo, ns.pr)
+
+    with open(paths["suggestions"], "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    print(f"✅ Suggestions result saved to: {paths['suggestions']}")
+
     return 0
 
 
@@ -301,11 +328,19 @@ def cmd_pr_mark_resolved(ns: argparse.Namespace) -> int:
             ns.loop.run_until_complete(_upd())
     except Exception:
         pass
-    print(
-        json.dumps(
-            {"updated": len(items), "resolved": bool(ns.resolved)}, ensure_ascii=False
-        )
-    )
+    result = {"updated": len(items), "resolved": bool(ns.resolved)}
+
+    # Print to stdout
+    print(json.dumps(result, ensure_ascii=False))
+
+    # Also save resolved status to structured path
+    output_mgr = _get_output_manager()
+    paths = output_mgr.get_pr_output_paths(ns.owner, ns.repo, ns.pr)
+
+    with open(paths["resolved"], "w", encoding="utf-8") as f:
+        json.dump(result, f, ensure_ascii=False, indent=2)
+    print(f"✅ Resolution status saved to: {paths['resolved']}")
+
     return 0
 
 
@@ -330,8 +365,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--min-length", type=int, default=None)
     s.add_argument("--after", default=None)
     s.add_argument("--before", default=None)
-    s.add_argument("--out", default=None)
-    s.add_argument("--ndjson", action="store_true")
+    s.add_argument(
+        "--ndjson", action="store_true", help="Save as NDJSON format instead of JSON"
+    )
 
     # context
     s = sub.add_parser("pr-context")

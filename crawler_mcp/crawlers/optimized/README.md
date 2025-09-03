@@ -20,10 +20,14 @@ The system follows a modular architecture with clear separation of concerns:
 
 ```
 crawler_mcp/crawlers/optimized/
-├── run.py                      # CLI entry point with comprehensive argument parsing
+├── run.py                      # CLI entry point wrapper
 ├── config.py                   # Central configuration with 100+ options
 ├── AGENTS.md                   # Agent interaction specifications
 ├── .env.example                # Environment configuration template
+│
+├── cli/                        # Command-line interfaces
+│   ├── crawl.py               # Main crawl CLI with structured output
+│   └── pr.py                  # GitHub PR operations CLI
 │
 ├── core/                       # Core orchestration and execution engine
 │   ├── strategy.py            # Main crawler strategy (AsyncCrawlerStrategy)
@@ -44,8 +48,13 @@ crawler_mcp/crawlers/optimized/
 │   ├── qdrant_http_client.py  # Qdrant vector database client
 │   └── local_reranker.py      # Local reranking capabilities
 │
-└── utils/                      # Utilities and monitoring
-    └── monitoring.py           # System metrics and health monitoring
+├── utils/                      # Utilities and monitoring
+│   ├── monitoring.py          # System metrics and health monitoring
+│   ├── output_manager.py      # Structured output management
+│   └── log_manager.py         # Rotating log file management
+│
+└── shared/                     # Shared components
+    └── reporting.py           # Enhanced reporting system
 ```
 
 ## Installation & Setup
@@ -84,16 +93,70 @@ OPTIMIZED_CRAWLER_QDRANT_COLLECTION=web_content
 
 # Language filtering (default English-only)
 OPTIMIZED_CRAWLER_ALLOWED_LOCALES=en
+
+# Output Management
+OPTIMIZED_CRAWLER_OUTPUT_DIR=./output
+OPTIMIZED_CRAWLER_MAX_OUTPUT_SIZE_GB=1.0
+OPTIMIZED_CRAWLER_LOG_ROTATION_SIZE_MB=10
+OPTIMIZED_CRAWLER_AUTO_CLEANUP=true
 ```
 
 ### Quick Start
 
-Basic crawl with progress monitoring:
+Basic crawl with progress monitoring and structured output:
 ```bash
 uv run python -m crawler_mcp.crawlers.optimized.run \
   --url https://docs.anthropic.com/en/docs/claude-code/sdk/sdk-overview \
   --progress
 ```
+
+Output will be automatically saved to:
+- `output/crawls/{domain}/latest/combined.html` - Full crawl HTML
+- `output/crawls/{domain}/latest/pages.ndjson` - Individual page data
+- `output/crawls/{domain}/latest/report.json` - Performance report
+- `output/logs/crawl.log` - Execution logs (rotated at 10MB)
+
+Previous crawl backed up to `output/crawls/{domain}/backup/`
+
+## Output Directory Structure
+
+The crawler uses a structured output system that automatically organizes results:
+
+```
+output/
+├── crawls/
+│   ├── {domain}/              # Per-domain organization
+│   │   ├── latest/            # Most recent crawl
+│   │   │   ├── combined.html  # Full HTML output
+│   │   │   ├── pages.ndjson   # Individual page data
+│   │   │   └── report.json    # Performance metrics
+│   │   └── backup/            # Previous crawl backup
+│   └── _index.json            # Crawl metadata tracking
+│
+├── pr/                        # GitHub PR operations
+│   ├── {owner}_{repo}_{pr}/   # Per-PR organization
+│   │   ├── items.ndjson       # PR items list
+│   │   ├── suggestions.json   # Applied suggestions
+│   │   └── resolved.json      # Resolution tracking
+│   └── _registry.json         # PR resolution registry
+│
+├── cache/                     # Temporary files (auto-cleaned)
+│   └── search/                # Search results cache
+│
+└── logs/                      # Rotating log files
+    ├── crawl.log              # Main execution log
+    ├── crawl.log.1-3          # Rotated backups
+    ├── errors.log             # Error-specific log
+    └── errors.log.1-3         # Rotated backups
+```
+
+### Output Management Features
+
+- **Space Limits**: Total output capped at 1GB, logs at 60MB
+- **Automatic Cleanup**: Removes old crawls when limits exceeded
+- **Log Rotation**: Files rotate at 10MB, keeping 3 backups
+- **Domain Organization**: Separate folders per crawled domain
+- **Backup System**: Previous crawl preserved for comparison
 
 ## Configuration Reference
 
@@ -329,10 +392,11 @@ uv run python -m crawler_mcp.crawlers.optimized.run [OPTIONS]
 - `--qdrant true/false`: Enable/disable Qdrant integration
 - `--allowed-locales CODES`: Set allowed language locales
 
-### Output Control
-- `--output-file PATH`: Save results to specific file
-- `--output-format json/ndjson`: Control output format
-- `--include-metadata`: Include crawl metadata in output
+### Output Management
+- `--output-dir PATH`: Base output directory (default: `./output`)
+- `--clean-outputs`: Clean all outputs before starting crawl
+- `--no-backup`: Skip backup rotation (overwrite previous backup)
+- `--skip-output`: Don't save outputs to disk (useful for testing)
 
 ## Developer Guide
 

@@ -10,6 +10,7 @@ import hmac
 import json
 import logging
 import os
+import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
@@ -21,6 +22,9 @@ import uvicorn
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
+
+# Import OutputManager for PR CLI integration
+from ..crawlers.optimized.utils.output_manager import OutputManager
 
 # Load environment variables
 load_dotenv()
@@ -54,6 +58,14 @@ class WebhookConfig:
             os.getenv("WEBHOOK_MAX_CONCURRENT_PROCESSES", "5")
         )
 
+        # New PR CLI integration settings
+        self.use_pr_cli = os.getenv("WEBHOOK_USE_PR_CLI", "true").lower() == "true"
+        self.pr_output_base_dir = os.getenv("WEBHOOK_PR_OUTPUT_DIR", "./output")
+        self.pr_filters = os.getenv("WEBHOOK_PR_FILTERS", "{}")
+        self.preserve_markdown = (
+            os.getenv("WEBHOOK_PRESERVE_MARKDOWN", "false").lower() == "true"
+        )
+
         # Event filtering
         self.process_reviews = os.getenv("PROCESS_REVIEWS", "true").lower() == "true"
         self.process_review_comments = (
@@ -73,6 +85,18 @@ class WebhookConfig:
         ]
 
         self.validate()
+
+        # Initialize OutputManager if using PR CLI
+        self._output_manager = None
+        if self.use_pr_cli:
+            self._output_manager = OutputManager(base_dir=self.pr_output_base_dir)
+
+    @property
+    def output_manager(self) -> OutputManager:
+        """Get OutputManager instance."""
+        if self._output_manager is None:
+            self._output_manager = OutputManager(base_dir=self.pr_output_base_dir)
+        return self._output_manager
 
     def validate(self) -> None:
         """Validate configuration."""
@@ -242,7 +266,7 @@ class WebhookProcessor:
         logger.info(f"Queued extraction for {task_id}")
 
     async def run_extraction_script(self, repo: str, pr_number: int) -> None:
-        """Run the extraction script."""
+        """Run extraction using either the old script or new PR CLI."""
         task_id = f"{repo}#{pr_number}"
 
         try:
@@ -251,33 +275,12 @@ class WebhookProcessor:
 
             owner, name = repo.split("/")
 
-            # Prepare command (resolve script path to absolute)
-            script_path = str(Path(self.config.script_path).resolve())
-            cmd = ["python", script_path, owner, name, str(pr_number)]
-
-            # Set environment variables for subprocess
-            env = os.environ.copy()
-            env["GITHUB_TOKEN"] = self.config.github_token
-
-            # Run extraction script
-            logger.info(f"Running extraction for {task_id}: {' '.join(cmd)}")
-
-            process = await asyncio.create_subprocess_exec(
-                *cmd,
-                env=env,
-                cwd=self.config.output_dir,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-
-            stdout, stderr = await process.communicate()
-
-            if process.returncode == 0:
-                logger.info(f"Extraction completed for {task_id}")
-                if stdout:
-                    logger.debug(f"Output: {stdout.decode()}")
+            if self.config.use_pr_cli:
+                await self._run_pr_cli_extraction(owner, name, pr_number, task_id)
             else:
-                logger.error(f"Extraction failed for {task_id}: {stderr.decode()}")
+                await self._run_legacy_script_extraction(
+                    owner, name, pr_number, task_id
+                )
 
         except Exception as e:
             logger.error(f"Error running extraction for {task_id}: {e}")
@@ -285,6 +288,175 @@ class WebhookProcessor:
             if task_id in self.active_processes:
                 del self.active_processes[task_id]
             self.stats["active_processes"] = len(self.active_processes)
+
+    async def _run_pr_cli_extraction(
+        self, owner: str, name: str, pr_number: int, task_id: str
+    ) -> None:
+        """Run extraction using the new PR CLI tool."""
+        # Prepare PR CLI command
+        cmd = [
+            sys.executable,
+            "-m",
+            "crawler_mcp.crawlers.optimized.cli.pr",
+            "pr-list",
+            "--owner",
+            owner,
+            "--repo",
+            name,
+            "--pr",
+            str(pr_number),
+            "--ndjson",  # Use structured output
+        ]
+
+        # Apply bot filters if configured
+        if self.config.bot_patterns:
+            cmd.extend(["--bots", ",".join(self.config.bot_patterns)])
+
+        # Apply custom PR filters from environment
+        try:
+            pr_filters = json.loads(self.config.pr_filters)
+            if pr_filters.get("only_unresolved"):
+                cmd.append("--only-unresolved")
+            if "min_length" in pr_filters:
+                cmd.extend(["--min-length", str(pr_filters["min_length"])])
+        except (json.JSONDecodeError, KeyError):
+            pass  # Ignore invalid filter configuration
+
+        # Set environment variables for subprocess
+        env = os.environ.copy()
+        env["GITHUB_TOKEN"] = self.config.github_token
+
+        # Run PR CLI extraction
+        logger.info(f"Running PR CLI extraction for {task_id}: {' '.join(cmd)}")
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            env=env,
+            cwd=Path.cwd(),  # Run from project root
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+
+        if process.returncode == 0:
+            logger.info(f"PR CLI extraction completed for {task_id}")
+            if stdout:
+                logger.debug(f"Output: {stdout.decode()}")
+
+            # Optionally convert to markdown for backward compatibility
+            if self.config.preserve_markdown:
+                await self._convert_to_markdown(owner, name, pr_number)
+        else:
+            logger.error(f"PR CLI extraction failed for {task_id}: {stderr.decode()}")
+
+    async def _run_legacy_script_extraction(
+        self, owner: str, name: str, pr_number: int, task_id: str
+    ) -> None:
+        """Run extraction using the legacy script."""
+        # Prepare legacy script command (resolve script path to absolute)
+        script_path = str(Path(self.config.script_path).resolve())
+        cmd = ["python", script_path, owner, name, str(pr_number)]
+
+        # Set environment variables for subprocess
+        env = os.environ.copy()
+        env["GITHUB_TOKEN"] = self.config.github_token
+
+        # Run legacy extraction script
+        logger.info(f"Running legacy extraction for {task_id}: {' '.join(cmd)}")
+
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            env=env,
+            cwd=self.config.output_dir,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+
+        if process.returncode == 0:
+            logger.info(f"Legacy extraction completed for {task_id}")
+            if stdout:
+                logger.debug(f"Output: {stdout.decode()}")
+        else:
+            logger.error(f"Legacy extraction failed for {task_id}: {stderr.decode()}")
+
+    async def _convert_to_markdown(self, owner: str, repo: str, pr_number: int) -> None:
+        """Convert PR CLI JSON output to markdown format for backward compatibility."""
+        try:
+            paths = self.config.output_manager.get_pr_output_paths(
+                owner, repo, pr_number
+            )
+
+            # Check if items file exists
+            if paths["items"].exists():
+                # Read NDJSON items
+                items = []
+                with open(paths["items"], encoding="utf-8") as f:
+                    for line in f:
+                        items.append(json.loads(line.strip()))
+
+                # Generate markdown content
+                md_content = self._generate_markdown_from_items(
+                    items, owner, repo, pr_number
+                )
+
+                # Write to legacy output location
+                legacy_file = (
+                    Path(self.config.output_dir) / f"{repo}-pr{pr_number}-fixes.md"
+                )
+                legacy_file.parent.mkdir(parents=True, exist_ok=True)
+                legacy_file.write_text(md_content, encoding="utf-8")
+
+                logger.info(f"Converted PR CLI output to markdown: {legacy_file}")
+
+        except Exception as e:
+            logger.warning(
+                f"Failed to convert to markdown for {owner}/{repo}#{pr_number}: {e}"
+            )
+
+    def _generate_markdown_from_items(
+        self, items: list[dict], owner: str, repo: str, pr_number: int
+    ) -> str:
+        """Generate markdown content from PR CLI items."""
+        content_lines = [
+            f"# AI Review Content from PR #{pr_number}",
+            "",
+            f"**Extracted from PR:** https://github.com/{owner}/{repo}/pull/{pr_number}",
+            f"**Items found:** {len(items)}",
+            "**Generated by:** Crawler MCP Webhook Server (PR CLI)",
+            "",
+            "---",
+            "",
+        ]
+
+        for item in items:
+            item_type = item.get("item_type", "unknown")
+            author = item.get("author", "unknown")
+            path = item.get("path", "")
+            line = item.get("line", "")
+            body = item.get("body", "")
+
+            # Format file reference
+            file_ref = ""
+            if path and line:
+                file_ref = f" - {path}:{line}"
+            elif path:
+                file_ref = f" - {path}"
+
+            # Add item to markdown
+            content_lines.extend(
+                [
+                    f"- [ ] [{item_type.upper()} - {author}{file_ref}]",
+                    f"{body}",
+                    "",
+                    "---",
+                    "",
+                ]
+            )
+
+        return "\n".join(content_lines)
 
     async def process_queue_worker(self) -> None:
         """Background worker to process the extraction queue."""
@@ -385,32 +557,95 @@ async def handle_webhook(
 @app.get("/health")
 async def health_check() -> JSONResponse:
     """Health check endpoint."""
-    return JSONResponse(
-        {
-            "status": "healthy",
-            "timestamp": datetime.now().isoformat(),
-            "stats": processor.stats,
-            "queue_size": processor.process_queue.qsize(),
-            "active_processes": len(processor.active_processes),
-        }
-    )
+    health_info = {
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "stats": processor.stats,
+        "queue_size": processor.process_queue.qsize(),
+        "active_processes": len(processor.active_processes),
+        "pr_cli_enabled": config.use_pr_cli,
+    }
+
+    # Add PR CLI specific health info
+    if config.use_pr_cli:
+        try:
+            output_mgr = config.output_manager
+            pr_count = 0
+            if output_mgr.pr_dir.exists():
+                pr_count = len(
+                    [
+                        d
+                        for d in output_mgr.pr_dir.iterdir()
+                        if d.is_dir() and not d.name.startswith("_")
+                    ]
+                )
+
+            health_info["pr_outputs"] = {
+                "total_prs": pr_count,
+                "output_dir": str(output_mgr.pr_dir),
+                "output_size_mb": round(output_mgr.get_total_size() / (1024 * 1024), 2),
+            }
+        except Exception as e:
+            health_info["pr_outputs"] = {"error": str(e)}
+
+    return JSONResponse(health_info)
 
 
 @app.get("/stats")
 async def get_stats() -> JSONResponse:
     """Get processing statistics."""
-    return JSONResponse(
-        {
-            "stats": processor.stats,
-            "queue_size": processor.process_queue.qsize(),
-            "active_processes": list(processor.active_processes.keys()),
-            "config": {
-                "repos_tracked": config.repos_to_track,
-                "max_concurrent": config.max_concurrent_processes,
-                "bot_patterns": config.bot_patterns,
-            },
-        }
-    )
+    stats_info = {
+        "stats": processor.stats,
+        "queue_size": processor.process_queue.qsize(),
+        "active_processes": list(processor.active_processes.keys()),
+        "config": {
+            "repos_tracked": config.repos_to_track,
+            "max_concurrent": config.max_concurrent_processes,
+            "bot_patterns": config.bot_patterns,
+            "pr_cli_enabled": config.use_pr_cli,
+            "output_mode": "pr_cli" if config.use_pr_cli else "legacy",
+        },
+    }
+
+    # Add PR CLI specific stats
+    if config.use_pr_cli:
+        try:
+            stats_info["pr_cli_config"] = {
+                "output_base_dir": config.pr_output_base_dir,
+                "preserve_markdown": config.preserve_markdown,
+                "filters": config.pr_filters,
+            }
+
+            output_mgr = config.output_manager
+            if output_mgr.pr_dir.exists():
+                recent_outputs = []
+                for pr_folder in sorted(
+                    output_mgr.pr_dir.iterdir(),
+                    key=lambda p: p.stat().st_mtime,
+                    reverse=True,
+                )[:5]:
+                    if pr_folder.is_dir() and not pr_folder.name.startswith("_"):
+                        recent_outputs.append(
+                            {
+                                "folder": pr_folder.name,
+                                "modified": pr_folder.stat().st_mtime,
+                                "size_kb": round(
+                                    sum(
+                                        f.stat().st_size
+                                        for f in pr_folder.rglob("*")
+                                        if f.is_file()
+                                    )
+                                    / 1024,
+                                    2,
+                                ),
+                            }
+                        )
+
+                stats_info["recent_pr_outputs"] = recent_outputs
+        except Exception as e:
+            stats_info["pr_cli_error"] = str(e)
+
+    return JSONResponse(stats_info)
 
 
 async def get_recent_prs_for_user(
@@ -686,22 +921,284 @@ async def manual_extraction(
         raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
+@app.post("/apply-suggestions")
+async def apply_pr_suggestions(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> JSONResponse:
+    """Apply code suggestions from PR comments using PR CLI.
+
+    Expected JSON payload:
+    {
+        "owner": "github-username",
+        "repo": "repository-name",
+        "pr_number": 123,
+        "strategy": "dry-run",  // or "commit"
+        "only_unresolved": true
+    }
+    """
+    try:
+        if not config.use_pr_cli:
+            raise HTTPException(
+                status_code=400,
+                detail="PR CLI not enabled. Set WEBHOOK_USE_PR_CLI=true",
+            )
+
+        payload = await request.json()
+        owner = payload.get("owner")
+        repo_name = payload.get("repo")
+        pr_number = payload.get("pr_number")
+        strategy = payload.get("strategy", "dry-run")
+        only_unresolved = payload.get("only_unresolved", False)
+
+        if not all([owner, repo_name, pr_number]):
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required fields: owner, repo, pr_number",
+            )
+
+        pr_number = int(pr_number)
+
+        # Build command
+        cmd = [
+            sys.executable,
+            "-m",
+            "crawler_mcp.crawlers.optimized.cli.pr",
+            "pr-apply-suggestions",
+            "--owner",
+            owner,
+            "--repo",
+            repo_name,
+            "--pr",
+            str(pr_number),
+            "--strategy",
+            strategy,
+        ]
+
+        if only_unresolved:
+            cmd.append("--only-unresolved")
+
+        # Set environment variables
+        env = os.environ.copy()
+        env["GITHUB_TOKEN"] = config.github_token
+
+        # Execute command
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            env=env,
+            cwd=Path.cwd(),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+
+        if process.returncode == 0:
+            try:
+                result = json.loads(stdout.decode())
+                return JSONResponse(result)
+            except json.JSONDecodeError:
+                return JSONResponse(
+                    {
+                        "status": "success",
+                        "message": "Suggestions applied successfully",
+                        "output": stdout.decode(),
+                    }
+                )
+        else:
+            raise HTTPException(
+                status_code=500, detail=f"Command failed: {stderr.decode()}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error applying suggestions: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+
+
+@app.post("/mark-resolved")
+async def mark_pr_items_resolved(request: Request) -> JSONResponse:
+    """Mark PR items as resolved using PR CLI.
+
+    Expected JSON payload:
+    {
+        "owner": "github-username",
+        "repo": "repository-name",
+        "pr_number": 123,
+        "resolved": true,
+        "item_types": "pr_review_comment,issue_comment"
+    }
+    """
+    try:
+        if not config.use_pr_cli:
+            raise HTTPException(
+                status_code=400,
+                detail="PR CLI not enabled. Set WEBHOOK_USE_PR_CLI=true",
+            )
+
+        payload = await request.json()
+        owner = payload.get("owner")
+        repo_name = payload.get("repo")
+        pr_number = payload.get("pr_number")
+        resolved = payload.get("resolved", True)
+        item_types = payload.get("item_types", "")
+
+        if not all([owner, repo_name, pr_number]):
+            raise HTTPException(
+                status_code=400,
+                detail="Missing required fields: owner, repo, pr_number",
+            )
+
+        pr_number = int(pr_number)
+
+        # Build command
+        cmd = [
+            sys.executable,
+            "-m",
+            "crawler_mcp.crawlers.optimized.cli.pr",
+            "pr-mark-resolved",
+            "--owner",
+            owner,
+            "--repo",
+            repo_name,
+            "--pr",
+            str(pr_number),
+            "--resolved",
+            "true" if resolved else "false",
+        ]
+
+        if item_types:
+            cmd.extend(["--item-types", item_types])
+
+        # Set environment variables
+        env = os.environ.copy()
+        env["GITHUB_TOKEN"] = config.github_token
+
+        # Execute command
+        process = await asyncio.create_subprocess_exec(
+            *cmd,
+            env=env,
+            cwd=Path.cwd(),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+
+        stdout, stderr = await process.communicate()
+
+        if process.returncode == 0:
+            try:
+                result = json.loads(stdout.decode())
+                return JSONResponse(result)
+            except json.JSONDecodeError:
+                return JSONResponse(
+                    {
+                        "status": "success",
+                        "message": "Items marked as resolved",
+                        "output": stdout.decode(),
+                    }
+                )
+        else:
+            raise HTTPException(
+                status_code=500, detail=f"Command failed: {stderr.decode()}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error marking resolved: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+
+
+@app.get("/pr-outputs")
+async def list_pr_outputs() -> JSONResponse:
+    """List available PR outputs."""
+    try:
+        if not config.use_pr_cli:
+            return JSONResponse(
+                {"message": "PR CLI not enabled", "outputs": [], "legacy_mode": True}
+            )
+
+        output_mgr = config.output_manager
+        pr_outputs = []
+
+        if output_mgr.pr_dir.exists():
+            for pr_folder in output_mgr.pr_dir.iterdir():
+                if pr_folder.is_dir() and not pr_folder.name.startswith("_"):
+                    # Parse folder name: owner_repo_pr_number
+                    parts = pr_folder.name.split("_")
+                    if len(parts) >= 3:
+                        try:
+                            pr_number = int(parts[-1])
+                            repo = "_".join(
+                                parts[1:-1]
+                            )  # Handle repos with underscores
+                            owner = parts[0]
+
+                            # Check what files exist
+                            paths = output_mgr.get_pr_output_paths(
+                                owner, repo, pr_number
+                            )
+                            files = {}
+                            for key, path in paths.items():
+                                files[key] = {
+                                    "exists": path.exists(),
+                                    "size": path.stat().st_size if path.exists() else 0,
+                                    "modified": path.stat().st_mtime
+                                    if path.exists()
+                                    else 0,
+                                }
+
+                            pr_outputs.append(
+                                {
+                                    "owner": owner,
+                                    "repo": repo,
+                                    "pr_number": pr_number,
+                                    "folder": str(pr_folder),
+                                    "files": files,
+                                }
+                            )
+                        except (ValueError, IndexError):
+                            continue  # Skip invalid folder names
+
+        return JSONResponse(
+            {"pr_outputs": pr_outputs, "total": len(pr_outputs), "pr_cli_enabled": True}
+        )
+
+    except Exception as e:
+        logger.error(f"Error listing PR outputs: {e}")
+        raise HTTPException(status_code=500, detail="Internal server error") from e
+
+
 @app.get("/")
 async def root() -> JSONResponse:
     """Root endpoint."""
+    endpoints = {
+        "webhook": "/webhook",
+        "health": "/health",
+        "stats": "/stats",
+        "recent": "/recent (GET)",
+        "batch": "/batch (POST)",
+        "manual": "/manual (POST)",
+    }
+
+    # Add PR CLI endpoints if enabled
+    if config.use_pr_cli:
+        endpoints.update(
+            {
+                "apply_suggestions": "/apply-suggestions (POST)",
+                "mark_resolved": "/mark-resolved (POST)",
+                "pr_outputs": "/pr-outputs (GET)",
+            }
+        )
+
     return JSONResponse(
         {
             "service": "GitHub Webhook Processor",
             "version": "1.0.0",
             "status": "running",
-            "endpoints": {
-                "webhook": "/webhook",
-                "health": "/health",
-                "stats": "/stats",
-                "recent": "/recent (GET)",
-                "batch": "/batch (POST)",
-                "manual": "/manual (POST)",
-            },
+            "pr_cli_enabled": config.use_pr_cli,
+            "endpoints": endpoints,
         }
     )
 
