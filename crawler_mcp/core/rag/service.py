@@ -15,7 +15,6 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from threading import RLock
 from typing import Any
-from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from fastmcp.exceptions import ToolError
 
@@ -23,6 +22,7 @@ from ...config import settings
 from ...models.crawl import CrawlResult
 from ...models.rag import DocumentChunk, RagQuery, RagResult, SearchMatch
 from ..embeddings import EmbeddingService
+from ..utils import normalize_url
 from ..vectors import VectorService
 from .processing import ProcessingPipeline
 
@@ -53,7 +53,7 @@ class QueryCache:
     ) -> str:
         """Generate a deterministic cache key from query parameters."""
         key_components = [
-            query.strip().lower(),
+            str(query).strip().lower(),
             str(limit),
             str(min_score),
             str(sorted(source_filters) if source_filters else ""),
@@ -348,6 +348,19 @@ class RagService:
         await self.embedding_service.close()
         await self.vector_service.close()
 
+    @classmethod
+    async def reset(cls) -> None:
+        """Reset the singleton for testing purposes."""
+        if cls._instance is not None:
+            # Close any open services
+            await cls._instance.close()
+            # Reset singleton state
+            cls._instance = None
+            cls._initialized = False
+            cls._context_count = 0
+            cls._lock = None
+            cls._auto_opened = False
+
     async def _ensure_open(self) -> None:
         """Ensure underlying services are initialized without requiring context manager."""
         if RagService._lock is None:
@@ -400,7 +413,7 @@ class RagService:
         """
         import uuid
 
-        normalized_url = self._normalize_url(url)
+        normalized_url = normalize_url(url)
         id_string = f"{normalized_url}:{chunk_index}"
         # Generate a deterministic UUID from the hash
         hash_bytes = hashlib.sha256(id_string.encode()).digest()[:16]
@@ -419,54 +432,6 @@ class RagService:
             SHA256 hash hexdigest string
         """
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
-
-    def _normalize_url(self, url: str) -> str:
-        """
-        Normalize URL for consistent hashing.
-
-        Normalizes:
-        - Protocol (http -> https)
-        - Removes trailing slashes
-        - Sorts query parameters
-        - Removes fragments
-
-        Args:
-            url: URL to normalize
-
-        Returns:
-            Normalized URL string
-        """
-        parsed = urlparse(url)
-
-        # Normalize protocol to https
-        scheme = "https" if parsed.scheme in ("http", "https") else parsed.scheme
-
-        # Remove trailing slash from path
-        path = parsed.path.rstrip("/")
-        if not path:
-            path = "/"
-
-        # Sort query parameters for consistency
-        if parsed.query:
-            params = parse_qs(parsed.query, keep_blank_values=True)
-            sorted_params = sorted(params.items())
-            query = urlencode(sorted_params, doseq=True)
-        else:
-            query = ""
-
-        # Reconstruct normalized URL (without fragment)
-        normalized = urlunparse(
-            (
-                scheme,
-                parsed.netloc.lower(),  # Lowercase domain
-                path,
-                parsed.params,
-                query,
-                "",  # Remove fragment
-            )
-        )
-
-        return normalized
 
     # Backwards compatibility helper methods
     def _is_random_uuid(self, chunk_id: str) -> bool:
@@ -906,7 +871,7 @@ class RagService:
     async def _process_embeddings_pipeline(
         self,
         document_chunks: list[DocumentChunk],
-        progress_callback: Callable | None = None,
+        progress_callback: Callable[[int, int], None] | None = None,
         base_progress: int = 0,
     ) -> int:
         """

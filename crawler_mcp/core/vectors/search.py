@@ -116,19 +116,17 @@ class SearchEngine(BaseVectorService):
                 FieldCondition(key="source_url", match=MatchAny(any=source_filter))
             )
 
-        # Add date range filtering using Qdrant's range filter
+        # Add date range filtering using a single Range
         if date_range:
             start, end = date_range
+            range_kwargs: dict[str, str] = {}
             if start is not None:
-                start_timestamp = _parse_timestamp(start).isoformat()
-                filter_conditions.append(
-                    FieldCondition(key="timestamp", range=Range(gte=start_timestamp))
-                )
-
+                range_kwargs["gte"] = _parse_timestamp(start).isoformat()
             if end is not None:
-                end_timestamp = _parse_timestamp(end).isoformat()
+                range_kwargs["lte"] = _parse_timestamp(end).isoformat()
+            if range_kwargs:
                 filter_conditions.append(
-                    FieldCondition(key="timestamp", range=Range(lte=end_timestamp))
+                    FieldCondition(key="timestamp", range=Range(**range_kwargs))
                 )
 
         # Return filter if we have conditions
@@ -238,6 +236,10 @@ class SearchEngine(BaseVectorService):
         """
         # Perform initial search
         results = await self.search_similar(query_vector, **kwargs)
+
+        # Apply rerank threshold filtering
+        if rerank_threshold is not None:
+            results = [m for m in results if m.score >= float(rerank_threshold)]
 
         # Simple reranking based on content length and score combination
         # In a production system, this could use more sophisticated reranking

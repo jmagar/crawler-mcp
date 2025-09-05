@@ -1,4 +1,6 @@
 # Python
+data/
+.playwright-mcp
 __pycache__/
 *.py[cod]
 *$py.class
@@ -80,10 +82,18 @@ downloads/
 repositories/
 cloned_repos/
 
+# Crawl artifacts (large, generated)
+crawl.html
+crawl_all.html
+pages.ndjson
+report.json
+
+# Structured output directory
+output/
+
 # Data directory contents (but keep structure)
 data/logs/
 data/data/
-data/webhook_outputs/
 
 # Vector database
 qdrant_data/

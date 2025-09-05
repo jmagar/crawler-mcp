@@ -12,6 +12,7 @@ from fastmcp.exceptions import ToolError
 
 from ..config import settings
 from ..models.rag import EmbeddingResult
+from .mixins import AsyncServiceBase
 from .resilience import exponential_backoff
 
 logger = logging.getLogger(__name__)
@@ -19,12 +20,13 @@ logger = logging.getLogger(__name__)
 T = TypeVar("T")
 
 
-class EmbeddingService:
+class EmbeddingService(AsyncServiceBase):
     """
     Service for generating text embeddings using HF TEI.
     """
 
     def __init__(self) -> None:
+        super().__init__()
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(settings.tei_timeout),
             limits=httpx.Limits(
@@ -35,19 +37,10 @@ class EmbeddingService:
         self.base_url = settings.tei_url.rstrip("/")
         self.model_name = settings.tei_model
 
-    async def __aenter__(self) -> "EmbeddingService":
-        """Async context manager entry."""
-        return self
-
-    async def __aexit__(
-        self, exc_type: type, exc_val: Exception, exc_tb: object
-    ) -> None:
-        """Async context manager exit."""
-        await self.client.aclose()
-
-    async def close(self) -> None:
-        """Close the HTTP client."""
-        await self.client.aclose()
+    async def _cleanup(self) -> None:
+        """Service-specific cleanup - close HTTP client."""
+        if self.client and not self.client.is_closed:
+            await self.client.aclose()
 
     def _chunked(self, iterable: Sequence["T"], size: int) -> Iterator[list["T"]]:
         """Yield successive chunks from the iterable."""
@@ -59,8 +52,32 @@ class EmbeddingService:
 
     async def _ensure_client_open(self) -> None:
         """Ensure the HTTP client is open and recreate if closed."""
+        client_needs_recreation = False
+
+        # Check if client is explicitly closed
         if self.client.is_closed:
-            logger.debug("HTTP client was closed, recreating...")
+            client_needs_recreation = True
+            self.logger.debug("HTTP client was closed, recreating...")
+        else:
+            # Check if event loop is still running (for test isolation)
+            try:
+                import asyncio
+
+                current_loop = asyncio.get_running_loop()
+                if current_loop.is_closed():
+                    client_needs_recreation = True
+                    self.logger.debug("Event loop is closed, recreating HTTP client...")
+            except RuntimeError:
+                # No running loop, create new client
+                client_needs_recreation = True
+                self.logger.debug("No running event loop, recreating HTTP client...")
+
+        if client_needs_recreation:
+            # Close the old client if it exists and isn't already closed
+            if not self.client.is_closed:
+                await self.client.aclose()
+
+            # Create a new client
             self.client = httpx.AsyncClient(
                 timeout=httpx.Timeout(settings.tei_timeout),
                 limits=httpx.Limits(
@@ -69,16 +86,16 @@ class EmbeddingService:
                 ),
             )
 
-    async def health_check(self) -> bool:
+    async def _health_check(self) -> bool:
         """
         Check if TEI service is healthy and responsive.
         """
         try:
             await self._ensure_client_open()
             response = await self.client.get(f"{self.base_url}/health")
-            return response.status_code == 200
+            return bool(response.status_code == 200)
         except Exception as e:
-            logger.error(f"TEI health check failed: {e}")
+            self.logger.error(f"TEI health check failed: {e}")
             return False
 
     async def get_model_info(self, max_size: int = 1000) -> dict[str, Any]:
@@ -117,10 +134,10 @@ class EmbeddingService:
 
                 return result
             else:
-                logger.warning(f"Failed to get model info: {response.status_code}")
+                self.logger.warning(f"Failed to get model info: {response.status_code}")
                 return {}
         except Exception as e:
-            logger.error(f"Error getting model info: {e}")
+            self.logger.error(f"Error getting model info: {e}")
             return {}
 
     @exponential_backoff(exceptions=(httpx.TimeoutException, httpx.RequestError))
@@ -144,7 +161,7 @@ class EmbeddingService:
         # Truncate text if necessary
         if truncate and len(text) > settings.embedding_max_length:
             text = text[: settings.embedding_max_length]
-            logger.warning(
+            self.logger.warning(
                 f"Text truncated to {settings.embedding_max_length} characters"
             )
 
@@ -172,7 +189,7 @@ class EmbeddingService:
                 error_msg = (
                     f"TEI service returned {response.status_code}: {response.text}"
                 )
-                logger.error(error_msg)
+                self.logger.error(error_msg)
                 raise ToolError(f"Embedding generation failed: {error_msg}")
 
             # Parse response
@@ -196,7 +213,7 @@ class EmbeddingService:
         except httpx.RequestError as e:
             raise ToolError(f"Failed to connect to TEI service: {e}") from e
         except Exception as e:
-            logger.error(f"Unexpected error generating embedding: {e}")
+            self.logger.error(f"Unexpected error generating embedding: {e}")
             raise ToolError(f"Embedding generation failed: {e!s}") from e
 
     async def generate_embeddings_true_batch(
@@ -249,7 +266,7 @@ class EmbeddingService:
                 error_msg = (
                     f"TEI service returned {response.status_code}: {response.text}"
                 )
-                logger.error(error_msg)
+                self.logger.error(error_msg)
                 raise ToolError(f"Batch embedding failed: {error_msg}")
 
             result = response.json()
@@ -277,7 +294,7 @@ class EmbeddingService:
                     )
                 )
 
-            logger.info(
+            self.logger.info(
                 f"Generated {len(results)} embeddings in {processing_time:.2f}s (true batch) - {len(results) / processing_time:.1f} embeddings/sec"
             )
             return results
@@ -289,7 +306,7 @@ class EmbeddingService:
         except httpx.RequestError as e:
             raise ToolError(f"Failed to connect to TEI service: {e}") from e
         except Exception as e:
-            logger.error(f"Unexpected error in batch embedding: {e}")
+            self.logger.error(f"Unexpected error in batch embedding: {e}")
             raise ToolError(f"Batch embedding failed: {e!s}") from e
 
     async def generate_embeddings_batch(

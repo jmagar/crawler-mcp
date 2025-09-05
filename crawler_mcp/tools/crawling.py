@@ -1,723 +1,635 @@
 """
-FastMCP tools for web crawling operations.
+Optimized crawling tools: `scrape` (single page) and `crawl` (unified).
+
+Both tools live under the optimized namespace and use only optimized/core
+components plus shared models. RAG ingestion is auto-enabled when TEI and
+Qdrant are configured, unless explicitly overridden per-call.
 """
 
-import logging
+from __future__ import annotations
+
+import os
+import re
+import shutil
+import tempfile
 import uuid
-from typing import Any
+from pathlib import Path
+from typing import Any, Literal
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
-from ..config import settings
-from ..core import CrawlerService, RagService
-from ..middleware.progress import progress_middleware
-from ..models.crawl import CrawlRequest, CrawlResult, CrawlStatus
-from ..models.sources import SourceType
+from crawler_mcp.crawl_core.strategy import OptimizedCrawlerStrategy
+from crawler_mcp.middleware.progress import progress_middleware
+from crawler_mcp.models.crawl import PageContent
+from crawler_mcp.optimized_config import OptimizedConfig
+from crawler_mcp.utils.output_manager import OutputManager
 
-logger = logging.getLogger(__name__)
+_HASH32_40_64_RE = re.compile(
+    r"^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{40}|[0-9a-fA-F]{64}|[A-Za-z0-9]{32})$"
+)
 
-
-def _detect_crawl_type_and_params(target: str) -> tuple[str, dict[str, Any]]:
-    """
-    Detect crawl type and normalize parameters based on input string.
-
-    Args:
-        target: Input string to analyze
-
-    Returns:
-        Tuple of (crawl_type, normalized_params)
-        crawl_type: 'directory', 'repository', or 'website'
-        normalized_params: Dictionary with type-specific parameters
-    """
-    from pathlib import Path
-
-    # 1. Local path detection (highest priority)
-    if target.startswith(("/", "./", "../", "~")) or Path(target).expanduser().exists():
-        return "directory", {"directory_path": str(Path(target).expanduser().resolve())}
-
-    # 2. Git repository detection
-    git_hosts = [
-        "github.com",
-        "gitlab.com",
-        "bitbucket.org",
-        "gitee.com",
-        "codeberg.org",
-    ]
-    if (
-        any(host in target for host in git_hosts)
-        or target.endswith(".git")
-        or target.startswith(("git@", "git://", "ssh://git@"))
-    ):
-        return "repository", {"repo_url": target}
-
-    # 3. Web URL detection (default fallback)
-    return "website", {"url": target}
+MAX_CLEAN_LEN = 50_000
 
 
-async def _process_rag_if_requested(
-    ctx: Context,
-    crawl_result: CrawlResult,
-    source_type: SourceType,
-    process_with_rag: bool,
-    seed_url: str,
-    crawl_session_id: str,
-    deduplication: bool | None = None,
-    force_update: bool = False,
-) -> dict[str, Any]:
-    """
-    Shared RAG processing logic for all crawl types with multi-stage progress reporting.
+def _strip_html_basic(html: str) -> str:
+    # Very lightweight HTML tag stripper as a last resort (no external deps)
+    try:
+        # remove scripts/styles
+        html = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
+        html = re.sub(r"<style[\s\S]*?</style>", " ", html, flags=re.IGNORECASE)
+        # remove tags
+        text = re.sub(r"<[^>]+>", " ", html)
+        # collapse whitespace
+        return re.sub(r"\s+", " ", text).strip()
+    except Exception:
+        return html
 
-    Args:
-        ctx: FastMCP context
-        crawl_result: Result from crawling operation
-        source_type: Type of source for registration
-        process_with_rag: Whether to process with RAG
-        seed_url: Original URL that initiated the crawl
-        crawl_session_id: Unique ID for this crawl session
-        deduplication: Enable deduplication (defaults to settings)
-        force_update: Force update all chunks even if unchanged
 
-    Returns:
-        Dictionary with RAG processing results or error info
-    """
-    rag_info: dict[str, Any] = {}
+def _get_clean_content(resp: Any, pages: list[PageContent]) -> str:
+    """Choose the best cleaned content from response/pages with safe fallbacks."""
+    # 1) Optimized response extracted content
+    try:
+        ec = getattr(resp, "extracted_content", "") or ""
+        if ec and not _is_placeholder_text(ec):
+            return ec
+    except Exception:
+        pass
 
-    if process_with_rag and crawl_result.pages:
-        total_items = len(crawl_result.pages)
-        await ctx.info(f"Starting RAG processing for {total_items} items")
-
-        # Multi-stage RAG processing with progress reporting
+    # Helper to pull markdown variants from a page-like object
+    def page_markdown(page: Any) -> str:
         try:
-            # Stage 1: Text chunking (0-25% of RAG progress)
-            await ctx.info("Stage 1: Chunking content into semantic segments")
-            await ctx.report_progress(progress=0, total=100)
+            md = getattr(page, "markdown", None)
+            if md:
+                return md
+            # Some conversions may keep fit/raw attributes inside markdown-like object
+            for attr in ("fit_markdown", "raw_markdown"):
+                val = getattr(page, attr, None)
+                if val:
+                    return str(val)
+        except Exception:
+            pass
+        return ""
 
-            # Stage 2: Generating embeddings (25-70% of RAG progress)
-            await ctx.info("Stage 2: Generating vector embeddings")
-            await ctx.report_progress(progress=25, total=100)
+    # 2) First page markdown
+    if pages:
+        md = page_markdown(pages[0])
+        if md and not _is_placeholder_text(md):
+            return md
 
-            async with RagService() as rag_service:
-                rag_stats = await rag_service.process_crawl_result(
-                    crawl_result,
-                    deduplication=deduplication,
-                    force_update=force_update,
-                    seed_url=seed_url,
-                    crawl_session_id=crawl_session_id,
-                )
-                rag_info["rag_processing"] = rag_stats
+    # 3) First page plaintext content
+    if pages:
+        try:
+            txt = getattr(pages[0], "content", "") or ""
+            if txt and not _is_placeholder_text(txt):
+                return txt
+        except Exception:
+            pass
 
-            # Stage 3: Vector indexing (70-90% of RAG progress)
-            await ctx.info("Stage 3: Indexing vectors in database")
-            await ctx.report_progress(progress=70, total=100)
+    # 4) First page HTML stripped
+    if pages:
+        try:
+            html = getattr(pages[0], "html", "") or ""
+            if html:
+                stripped = _strip_html_basic(html)
+                if stripped and not _is_placeholder_text(stripped):
+                    return stripped
+        except Exception:
+            pass
 
-            # Stage 4: Source registration (90-100% of RAG progress)
-            await ctx.info("Stage 4: Registering sources and metadata")
-            await ctx.report_progress(progress=90, total=100)
+    return ""
 
-            # Source registration is now handled automatically through RAG processing
-            # Sources are tracked in Qdrant when documents are added
-            rag_info["sources_registered"] = total_items
 
-            # Final completion
-            await ctx.report_progress(progress=100, total=100)
-            await ctx.info(
-                f"RAG processing completed: {rag_stats.get('chunks_created', 0)} chunks, "
-                f"{rag_stats.get('embeddings_generated', 0)} embeddings"
+def _is_placeholder_text(text: str) -> bool:
+    t = (text or "").strip()
+    if not t:
+        return True
+    # very short overall
+    if len(t) < 16:
+        return True
+    # check first lines for hash-like placeholders or hash walls
+    lines = [ln.strip() for ln in t.splitlines() if ln.strip()]
+    if not lines:
+        return True
+    first = lines[0]
+    if _HASH32_40_64_RE.match(first):
+        return True
+    if len(first) >= 8 and set(first) == {"#"}:
+        return True
+    if t.lower().startswith("hash:"):
+        return True
+    # minimal tokens
+    return len(re.findall(r"\w+", t)) < 8
+
+
+def _env(var: str) -> str | None:
+    v = os.getenv(var)
+    return v if v and v.strip() else None
+
+
+def _should_ingest_rag(rag_ingest: bool | None) -> bool:
+    """Tri-state RAG toggle: True/False/None(auto)."""
+    if rag_ingest is True:
+        return True
+    if rag_ingest is False:
+        return False
+    # Auto: on when both endpoints exist
+    tei = _env("OPTIMIZED_CRAWLER_TEI_ENDPOINT") or _env("TEI_URL")
+    qdrant = _env("OPTIMIZED_CRAWLER_QDRANT_URL") or _env("QDRANT_URL")
+    return bool(tei and qdrant)
+
+
+def _apply_rag_to_config(cfg: OptimizedConfig, enable: bool) -> None:
+    """Apply RAG auto/override to OptimizedConfig (embeddings + qdrant)."""
+    if enable:
+        # Prefer optimized-prefixed envs; fall back to standard ones
+        tei = _env("OPTIMIZED_CRAWLER_TEI_ENDPOINT") or _env("TEI_URL")
+        qurl = _env("OPTIMIZED_CRAWLER_QDRANT_URL") or _env("QDRANT_URL")
+        qcol = _env("OPTIMIZED_CRAWLER_QDRANT_COLLECTION") or _env("QDRANT_COLLECTION")
+        if not (tei and qurl):
+            raise ToolError(
+                "RAG ingestion requested but TEI and/or Qdrant endpoints are missing"
             )
-
-        except Exception as e:
-            await ctx.info(f"RAG processing failed: {e!s}")
-            rag_info["rag_processing_error"] = str(e)
-
-    return rag_info
-
-
-def _process_crawl_result_unified(
-    crawl_result: CrawlResult,
-    crawl_type: str,
-    original_target: str,
-) -> dict[str, Any]:
-    """
-    Process crawl result into unified response format.
-
-    Args:
-        crawl_result: Result from crawling operation
-        crawl_type: Type of crawl ('directory', 'repository', 'website')
-        original_target: Original input target
-
-    Returns:
-        Unified result dictionary
-    """
-    if crawl_type == "website":
-        # Web crawling result format
-        result: dict[str, Any] = {
-            "status": crawl_result.status,
-            "pages_crawled": len(crawl_result.pages),
-            "pages_requested": crawl_result.statistics.total_pages_requested,
-            "success_rate": crawl_result.success_rate,
-            "statistics": {
-                "total_pages_crawled": crawl_result.statistics.total_pages_crawled,
-                "total_pages_failed": crawl_result.statistics.total_pages_failed,
-                "unique_domains": crawl_result.statistics.unique_domains,
-                "total_links_discovered": crawl_result.statistics.total_links_discovered,
-                "total_bytes_downloaded": crawl_result.statistics.total_bytes_downloaded,
-                "crawl_duration_seconds": crawl_result.statistics.crawl_duration_seconds,
-                "pages_per_second": crawl_result.statistics.pages_per_second,
-                "average_page_size": crawl_result.statistics.average_page_size,
-            },
-            "advanced_features": {
-                "adaptive_crawling": True,
-                "url_seeding": True,
-                "link_scoring": True,
-                "memory_adaptive_dispatch": True,
-                "virtual_scroll_support": True,
-                "crawl4ai_version": "0.7.0+",
-                "extraction_methods": ["adaptive_ai", "traditional"],
-            },
-            "errors": crawl_result.errors[:10],
-            "sample_pages": [],
-        }
-
-        # Add sample page information
-        for page in crawl_result.pages[:5]:
-            result["sample_pages"].append(
-                {
-                    "url": page.url,
-                    "title": page.title,
-                    "word_count": page.word_count,
-                    "links_count": len(page.links),
-                    "images_count": len(page.images),
-                }
-            )
-
+        cfg.enable_embeddings = True
+        cfg.enable_qdrant = True
+        cfg.tei_endpoint = tei
+        cfg.qdrant_url = qurl
+        if qcol:
+            cfg.qdrant_collection = qcol
     else:
-        # File-based crawling result format (directory or repository)
-        file_result: dict[str, Any] = {
-            "status": crawl_result.status.value,
-            "files_processed": len(crawl_result.pages),
-            "total_content_size": sum(
-                len(page.content or "") for page in crawl_result.pages
-            ),
-            "file_types": {},
-            "statistics": {
-                "total_files": len(crawl_result.pages),
-                "total_bytes": crawl_result.statistics.total_bytes_downloaded,
-                "processing_time": crawl_result.statistics.crawl_duration_seconds,
-            },
-            "errors": crawl_result.errors[:10],
-            "sample_files": [],
-        }
+        cfg.enable_embeddings = False
+        cfg.enable_qdrant = False
 
-        if crawl_type == "repository":
-            file_result["repository_url"] = original_target
-            file_result["adaptive_features"] = {
-                "file_prioritization": True,
-                "content_filtering": True,
-                "batch_processing": True,
-                "language_detection": True,
-                "processing_method": "adaptive_batch",
-            }
-        else:  # directory
-            file_result["directory_path"] = original_target
-            file_result["intelligent_features"] = {
-                "relevance_scoring": True,
-                "adaptive_filtering": True,
-                "content_type_detection": True,
-                "batch_processing": True,
-                "processing_method": "adaptive_directory",
-            }
 
-        # Analyze file types
-        file_types: dict[str, int] = {}
-        for page in crawl_result.pages:
-            file_ext = page.metadata.get("file_extension", "unknown")
-            file_types[file_ext] = file_types.get(file_ext, 0) + 1
-        file_result["file_types"] = file_types
+def _detect_target(
+    target: str,
+) -> Literal["website", "github_pr", "repository", "directory"]:
+    if re.match(r"^https?://", target, re.IGNORECASE):
+        # PR fast-path
+        if re.match(
+            r"^https://github\.com/[^/]+/[^/]+/pull/\d+", target, re.IGNORECASE
+        ):
+            return "github_pr"
+        return "website"
+    if os.path.isdir(target):
+        return "directory"
+    if target.endswith(".git") or target.startswith("git@") or "github.com" in target:
+        return "repository"
+    raise ToolError(f"Unsupported or undetected target type: {target}")
 
-        # Add sample file information
-        for page in crawl_result.pages[:10]:
-            if crawl_type == "repository":
-                sample_info = {
-                    "path": page.metadata.get("file_path", page.url),
-                    "extension": page.metadata.get("file_extension", ""),
-                    "size": page.metadata.get("file_size", len(page.content or "")),
-                    "word_count": page.word_count,
-                }
-            else:  # directory
-                sample_info = {
-                    "path": page.metadata.get("relative_path", page.title),
-                    "extension": page.metadata.get("file_extension", ""),
-                    "size": page.metadata.get("file_size", len(page.content or "")),
-                    "word_count": page.word_count,
-                }
-            file_result["sample_files"].append(sample_info)
 
-        result = file_result
+def _read_text_file(path: Path, size_limit: int) -> str:
+    try:
+        if path.stat().st_size > size_limit:
+            return ""
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return ""
 
-    return result
+
+async def _crawl_directory(
+    ctx: Context,
+    root: Path,
+    include: list[str] | None,
+    exclude: list[str] | None,
+    max_files: int,
+    file_size_limit_bytes: int,
+) -> list[PageContent]:
+    await ctx.info(f"Scanning directory: {root}")
+    patterns = include or ["**/*.md", "**/*.txt", "**/*.html", "**/*.py"]
+    seen: set[Path] = set()
+    pages: list[PageContent] = []
+    for pat in patterns:
+        for p in root.rglob(pat):
+            if not p.is_file():
+                continue
+            if exclude and any(p.match(ex) for ex in exclude):
+                continue
+            if p in seen:
+                continue
+            seen.add(p)
+            content = _read_text_file(p, file_size_limit_bytes)
+            if not content:
+                continue
+            # Filter placeholder-like files
+            if _is_placeholder_text(content):
+                continue
+            pages.append(
+                PageContent(
+                    url=f"file://{p}",
+                    title=p.name,
+                    content=content,
+                    markdown=content
+                    if p.suffix.lower() in {".md", ".markdown"}
+                    else None,
+                    html=None,
+                    links=[],
+                    images=[],
+                    metadata={"path": str(p)},
+                )
+            )
+            if len(pages) >= max_files:
+                break
+        if len(pages) >= max_files:
+            break
+    return pages
+
+
+async def _crawl_repository(
+    ctx: Context,
+    repo_url: str,
+    include: list[str] | None,
+    exclude: list[str] | None,
+    max_files: int,
+    file_size_limit_bytes: int,
+) -> tuple[list[PageContent], Path]:
+    await ctx.info(f"Cloning repository: {repo_url}")
+    tmpdir = Path(tempfile.mkdtemp(prefix="repo_crawl_"))
+    try:
+        try:
+            from git import Repo  # type: ignore
+        except Exception as e:
+            raise ToolError(
+                "GitPython is required to crawl repositories; ensure dependency is installed"
+            ) from e
+        Repo.clone_from(repo_url, tmpdir, depth=1, no_single_branch=True)
+        pages = await _crawl_directory(
+            ctx,
+            tmpdir,
+            include=include,
+            exclude=exclude,
+            max_files=max_files,
+            file_size_limit_bytes=file_size_limit_bytes,
+        )
+        return pages, tmpdir
+    except Exception as e:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        raise ToolError(f"Failed to clone or scan repository: {e}") from e
 
 
 def register_crawling_tools(mcp: FastMCP) -> None:
-    """Register all crawling tools with the FastMCP server."""
+    """Register `scrape` and `crawl` tools on the provided FastMCP instance."""
 
     @mcp.tool
     async def scrape(
         ctx: Context,
         url: str,
-        extraction_strategy: str | None = None,
+        screenshot: bool = False,  # reserved for future screenshot support
         wait_for: str | None = None,
-        include_raw_html: bool = False,
-        process_with_rag: bool = True,
-        enable_virtual_scroll: bool | None = None,
-        virtual_scroll_count: int | None = None,
-        deduplication: bool | None = None,
-        force_update: bool = False,
+        css_selector: str | None = None,
+        javascript: bool | None = None,
+        timeout_ms: int = 30000,
+        rag_ingest: bool | None = None,
     ) -> dict[str, Any]:
-        """
-        Scrape a single web page using Crawl4AI with advanced features.
+        """Single Page Intelligence: extract one web page with optimized pipeline."""
+        if not re.match(r"^https?://", url, re.IGNORECASE):
+            raise ToolError("Invalid URL; must start with http:// or https://")
 
-        Args:
-            url: The URL to scrape
-            extraction_strategy: Content extraction strategy ("llm", "cosine", "json_css") or None for default
-            wait_for: CSS selector or JavaScript condition to wait for (optional)
-            include_raw_html: Whether to include raw HTML in the response
-            process_with_rag: Whether to process content for RAG indexing
-            enable_virtual_scroll: Enable virtual scroll for dynamic content (auto-detect if None)
-            virtual_scroll_count: Number of scroll actions (defaults to config setting)
-            deduplication: Enable deduplication (defaults to settings)
-            force_update: Force update all chunks even if unchanged
-
-        Returns:
-            Dictionary with scraped content and metadata
-        """
-        await ctx.info(f"Starting scrape of: {url}")
-
-        # Generate unique crawl session ID for provenance tracking
-        crawl_session_id = str(uuid.uuid4())
-        await ctx.info(f"Crawl session ID: {crawl_session_id}")
-
-        # Create progress tracker
-        progress_tracker = progress_middleware.create_tracker(f"scrape_{hash(url)}")
-
-        # Determine total steps based on enabled features
-        total_steps = 5 if process_with_rag else 4
-
+        tracker = progress_middleware.create_tracker(f"scrape_{hash(url)}")
         try:
-            # Step 1: Initialize services
-            await ctx.info("Initializing crawler services")
-            await ctx.report_progress(progress=1, total=total_steps)
-            crawler_service = CrawlerService()
+            await ctx.info(f"Starting scrape of: {url}")
+            await ctx.report_progress(progress=5, total=100)
 
-            # Step 2: Configure scraping parameters
-            await ctx.info(
-                f"Configuring scrape for {extraction_strategy or 'default'} extraction"
+            cfg = OptimizedConfig.from_env()
+            if javascript is not None:
+                cfg.javascript_enabled = bool(javascript)
+            cfg.page_timeout = max(1000, int(timeout_ms))
+
+            rag_enabled = _should_ingest_rag(rag_ingest)
+            _apply_rag_to_config(cfg, rag_enabled)
+
+            output = OutputManager(config=cfg)
+            domain = output.sanitize_domain(url)
+            output.rotate_crawl_backup(domain)
+
+            await ctx.report_progress(progress=20, total=100)
+
+            # Generate unique session ID for this crawl
+            session_id = str(uuid.uuid4())
+            await ctx.info(f"Crawl session ID: {session_id}")
+
+            strategy = OptimizedCrawlerStrategy(cfg)
+            await ctx.info("Calling strategy.crawl with max_urls=1")
+            try:
+                resp = await strategy.crawl(
+                    url,
+                    max_urls=1,
+                    max_concurrent=max(1, cfg.max_concurrent_crawls),
+                )
+                await ctx.info(
+                    f"Strategy returned success: {getattr(resp, 'success', 'unknown')}"
+                )
+            except Exception as e:
+                await ctx.info(
+                    f"Strategy.crawl threw exception: {type(e).__name__}: {e}"
+                )
+                # Re-raise to let normal error handling proceed
+                raise
+
+            pages = getattr(strategy, "get_last_pages", lambda: [])()
+            # Compute cleaned content for return; if empty, do bounded JS retry
+            clean = _get_clean_content(resp, pages)
+            tried_js_retry = False
+            if not clean and (
+                os.getenv("OPTIMIZED_CRAWLER_SCRAPE_RETRY_JS", "true").lower() == "true"
+            ):
+                tried_js_retry = True
+                cfg2 = OptimizedConfig.from_env()
+                cfg2.javascript_enabled = True
+                try:
+                    cfg2.page_timeout = max(int(timeout_ms), 45000)
+                except Exception:
+                    cfg2.page_timeout = max(getattr(cfg2, "page_timeout", 30000), 45000)
+                strategy2 = OptimizedCrawlerStrategy(cfg2)
+                resp2 = await strategy2.crawl(url, max_urls=1, max_concurrent=1)
+                pages2 = getattr(strategy2, "get_last_pages", lambda: [])()
+                clean2 = _get_clean_content(resp2, pages2)
+                if clean2:
+                    resp = resp2
+                    pages = pages2
+                    clean = clean2
+
+            paths = output.get_crawl_output_paths(url, session_id)
+            output.save_crawl_outputs(
+                domain=domain,
+                html=getattr(resp, "html", "") or None,
+                pages=pages,
+                report=getattr(resp, "metadata", {}) or {},
+                session_id=session_id,
             )
-            await ctx.report_progress(progress=2, total=total_steps)
-
-            # Prepare virtual scroll configuration if specified
-            virtual_scroll_config = None
-            if virtual_scroll_count:
-                virtual_scroll_config = {"scroll_count": virtual_scroll_count}
-
-            # Step 3: Execute web scraping
-            await ctx.info("Fetching and extracting page content")
-            await ctx.report_progress(progress=3, total=total_steps)
-
-            page_content = await crawler_service.scrape_single_page(
-                url=url,
-                extraction_strategy=extraction_strategy,
-                wait_for=wait_for,
-                custom_config={},  # Empty config - include_raw_html is handled by the response object
-                use_virtual_scroll=enable_virtual_scroll or False,
-                virtual_scroll_config=virtual_scroll_config,
-            )
-
-            # Step 4: Process results
-            await ctx.info("Processing extraction results")
-            await ctx.report_progress(progress=4, total=total_steps)
-
-            result: dict[str, Any] = {
-                "url": page_content.url,
-                "title": page_content.title,
-                "content": page_content.content,
-                "word_count": page_content.word_count,
-                "links_found": len(page_content.links),
-                "images_found": len(page_content.images),
-                "metadata": page_content.metadata,
-                "timestamp": page_content.timestamp.isoformat(),
-                "advanced_features": {
-                    "extraction_strategy": extraction_strategy,
-                    "virtual_scroll_enabled": enable_virtual_scroll,
-                    "virtual_scroll_count": virtual_scroll_count,
-                    "crawl4ai_version": "0.7.0+",
+            output.create_latest_symlink(domain, session_id)
+            output.update_index(
+                domain,
+                {
+                    "url": url,
+                    "pages": len(pages),
+                    "rag_enabled": rag_enabled,
                 },
+                session_id,
+            )
+            clean_truncated = False
+            if len(clean) > MAX_CLEAN_LEN:
+                clean = clean[:MAX_CLEAN_LEN]
+                clean_truncated = True
+
+            content_preview = (
+                clean or getattr(resp, "extracted_content", "") or ""
+            ).strip()[:500]
+            title = pages[0].title if pages else None
+            word_count = pages[0].word_count if pages else 0
+
+            await ctx.report_progress(progress=100, total=100)
+
+            # Separate network success from content extraction success
+            network_success = bool(getattr(resp, "success", True))
+            content_extracted = bool(clean)
+
+            # Overall success if network succeeded, regardless of content extraction
+            overall_success = network_success
+
+            # Add diagnostic information
+            diagnostics = {
+                "network_success": network_success,
+                "content_extracted": content_extracted,
+                "pages_found": len(pages),
+                "retry_js_attempted": tried_js_retry,
             }
 
-            if include_raw_html:
-                result["html"] = page_content.html
-                result["markdown"] = page_content.markdown
-                links: list[str] = list(page_content.links)
-                images: list[str] = list(page_content.images)
-                result["links"] = links
-                result["images"] = images
-
-            # Step 5: Process with RAG if requested
-            if process_with_rag:
-                await ctx.info("Processing content for RAG indexing")
-                await ctx.report_progress(progress=5, total=total_steps)
-
-                # Create a minimal crawl result for RAG processing
-                from ..models.crawl import (
-                    CrawlResult,
-                    CrawlStatistics,
-                    CrawlStatus,
+            # If network succeeded but no content, add diagnosis
+            if network_success and not content_extracted:
+                await ctx.info(
+                    f"Network request succeeded but no content extracted from {url}"
                 )
+                diagnostics["extraction_issue"] = "content_empty_after_processing"
 
-                crawl_result = CrawlResult(
-                    request_id="single_scrape",
-                    status=CrawlStatus.COMPLETED,
-                    urls=[url],
-                    pages=[page_content],
-                    statistics=CrawlStatistics(
-                        total_pages_requested=1,
-                        total_pages_crawled=1,
-                        total_bytes_downloaded=len(page_content.content),
-                    ),
-                )
-                rag_info = await _process_rag_if_requested(
-                    ctx,
-                    crawl_result,
-                    SourceType.WEBPAGE,
-                    process_with_rag=True,
-                    seed_url=url,  # The scraped URL is the seed URL for single scraping
-                    crawl_session_id=crawl_session_id,
-                    deduplication=deduplication,
-                    force_update=force_update,
-                )
-                result.update(rag_info)
+            # If network failed, add more details
+            if not network_success:
+                await ctx.info(f"Network request failed for {url}")
+                diagnostics["network_issue"] = "http_request_failed"
 
-            await ctx.info("Scraping completed successfully")
-            await ctx.report_progress(progress=total_steps, total=total_steps)
-            await ctx.info(
-                f"Successfully scraped {url}: {page_content.word_count} words, {len(page_content.links)} links"
-            )
-
-            return result
-
-        except Exception as e:
-            error_msg = f"Failed to scrape {url}: {e!s}"
-            await ctx.info(error_msg)
-            raise ToolError(error_msg) from e
-
+            return {
+                "success": overall_success,
+                "url": url,
+                "title": title,
+                "word_count": word_count,
+                "content_preview": content_preview,
+                "outputs": {
+                    "html_path": str(paths["html"]),
+                    "ndjson_path": str(paths["ndjson"]),
+                    "report_path": str(paths["report"]),
+                },
+                "rag": {"enabled": rag_enabled},
+                "clean_content": clean,
+                "clean_truncated": clean_truncated,
+                "retry_js": tried_js_retry,
+                "diagnostics": diagnostics,
+            }
         finally:
-            progress_middleware.remove_tracker(progress_tracker.operation_id)
+            progress_middleware.remove_tracker(tracker.operation_id)
 
     @mcp.tool
     async def crawl(
         ctx: Context,
         target: str,
-        process_with_rag: bool = True,
-        # Deduplication parameters
-        deduplication: bool | None = None,
-        force_update: bool = False,
-        # Web-specific parameters (ignored for file/repo crawling)
+        limit: int = 100,
+        depth: int = 2,
+        max_concurrent: int | None = None,
         include_patterns: list[str] | None = None,
         exclude_patterns: list[str] | None = None,
-        sitemap_first: bool = True,
-        # File-specific parameters (ignored for web crawling)
-        file_patterns: list[str] | None = None,
-        recursive: bool = True,
-        # Repo-specific parameters (ignored for other types)
-        clone_path: str | None = None,
+        javascript: bool | None = None,
+        screenshot_samples: int = 0,  # reserved for future
+        timeout_ms: int = 30000,
+        rag_ingest: bool | None = None,
     ) -> dict[str, Any]:
-        """
-        Smart crawl function that automatically detects input type and routes appropriately.
-
-        This unified tool handles all crawling scenarios:
-        - Local directories: "/home/user/code", "./src", "../docs"
-        - Git repositories: "https://github.com/user/repo", "git@github.com:user/repo.git"
-        - Websites: "https://example.com", "http://site.org/page"
-
-        The function automatically detects the input type and uses the appropriate crawling method:
-        - Directory crawling with intelligent file processing and relevance scoring
-        - Repository cloning and analysis with adaptive batch processing
-        - Website crawling with AI-powered site-wide discovery and deep crawling
-
-        Args:
-            target: Target to crawl (auto-detected: directory path, repository URL, or website URL)
-            process_with_rag: Whether to process content for RAG indexing
-            deduplication: Enable deduplication (defaults to settings)
-            force_update: Force update all chunks even if unchanged
-
-            # Web crawling parameters (used when target is a website)
-            include_patterns: URL patterns to include (optional)
-            exclude_patterns: URL patterns to exclude (optional)
-            sitemap_first: Whether to check sitemap.xml first
-
-            # File crawling parameters (used when target is a directory)
-            file_patterns: File patterns to include (e.g., ['*.py', '*.md'])
-            recursive: Whether to crawl subdirectories recursively
-
-            # Repository parameters (used when target is a git repository)
-            clone_path: Custom path to clone the repository (optional)
-
-        Returns:
-            Dictionary with crawl results and statistics (format varies by detected type)
-
-        Examples:
-            crawl("/home/jmagar/code")  # → directory crawling
-            crawl("https://github.com/user/repo")  # → repository cloning and crawling
-            crawl("https://example.com")  # → website crawling
-        """
-        # Detect input type and get normalized parameters
-        crawl_type, type_params = _detect_crawl_type_and_params(target)
-
-        await ctx.info(f"Detected {crawl_type} crawl for target: {target}")
-
-        # Generate unique crawl session ID for provenance tracking
-        crawl_session_id = str(uuid.uuid4())
-        await ctx.info(f"Crawl session ID: {crawl_session_id}")
-
-        # Create progress tracker
-        progress_tracker = progress_middleware.create_tracker(f"crawl_{hash(target)}")
-
-        # Determine total progress steps based on crawl type and options
-        base_steps = (
-            6  # Discovery, crawling, processing, validation, RAG (optional), completion
-        )
-        total_steps = base_steps if process_with_rag else base_steps - 1
-
+        """Unified Smart Crawling: website, directory, repository, or GitHub PR."""
+        kind = _detect_target(target)
+        tracker = progress_middleware.create_tracker(f"crawl_{hash(target)}")
         try:
-            # Step 1: Initialize services and validate
-            await ctx.info("Initializing crawler services and validating target")
-            await ctx.report_progress(progress=1, total=total_steps)
-            crawler_service = CrawlerService()
-            crawl_result = None
+            await ctx.report_progress(progress=5, total=100)
 
-            # Step 2: Configure crawling strategy
-            await ctx.info(f"Configuring {crawl_type} crawling strategy")
-            await ctx.report_progress(progress=2, total=total_steps)
+            cfg = OptimizedConfig.from_env()
+            cfg.page_timeout = max(1000, int(timeout_ms))
+            if max_concurrent is not None:
+                cfg.max_concurrent_crawls = max(1, int(max_concurrent))
+            if javascript is not None:
+                cfg.javascript_enabled = bool(javascript)
 
-            # Route to appropriate crawling method based on detected type
-            if crawl_type == "directory":
-                await ctx.info(
-                    f"Starting directory crawl: {type_params['directory_path']}"
+            rag_enabled = _should_ingest_rag(rag_ingest)
+            _apply_rag_to_config(cfg, rag_enabled)
+
+            output = OutputManager(config=cfg)
+
+            await ctx.info("Preparing crawl...")
+            await ctx.report_progress(progress=15, total=100)
+
+            # Generate unique session ID for this crawl
+            session_id = str(uuid.uuid4())
+            await ctx.info(f"Crawl session ID: {session_id}")
+
+            docs_preview: list[dict[str, Any]] = []
+            paths: dict[str, Path] | None = None
+            success = True
+            pages_total = 0
+            pages_failed = 0
+            duration_s = 0.0
+            domain_for_index = ""
+
+            if kind in ("website", "github_pr"):
+                url = target
+                domain_for_index = output.sanitize_domain(url)
+                output.rotate_crawl_backup(domain_for_index)
+
+                strategy = OptimizedCrawlerStrategy(cfg)
+                resp = await strategy.crawl(
+                    url,
+                    max_urls=max(1, int(limit)),
+                    max_concurrent=max(1, cfg.max_concurrent_crawls),
+                )
+                pages = getattr(strategy, "get_last_pages", lambda: [])()
+                pages_total = len(pages)
+                # Try to derive failures from headers if present
+                try:
+                    failed_ct = int(
+                        resp.response_headers.get("X-Failed-URLs-Count", "0")
+                    )
+                except Exception:
+                    failed_ct = 0
+                pages_failed = failed_ct
+                duration_s = (
+                    float(
+                        getattr(getattr(resp, "metadata", {}), "get", lambda *_: 0)(
+                            "duration_seconds", 0
+                        )
+                    )
+                    or 0.0
                 )
 
-                # Enhanced progress callback for directory crawler
-                last_reported = [0]  # Use list to allow modification in nested function
-
-                def dir_progress(
-                    current: int, total: int, message: str | None = None
-                ) -> None:
-                    # Only report significant progress changes to avoid spam
-                    if (
-                        current - last_reported[0] >= max(1, total // 20)
-                        or current == total
-                    ):
-                        # Async calls from sync context need special handling
-                        import asyncio
-
-                        try:
-                            # Map directory progress to step 3 portion (20-60% of total)
-                            _ = (
-                                3 + (current / total) * 2 if total > 0 else 3
-                            )  # Progress calculation for future use
-                            loop = asyncio.get_event_loop()
-                            if message:
-                                task = loop.create_task(
-                                    ctx.info(f"Directory scan: {message}")
-                                )
-                                # Store task reference to avoid RUF006 warning
-                                _ = task
-                            last_reported[0] = current
-                        except Exception:
-                            pass  # Ignore progress reporting errors
-
-                await ctx.report_progress(progress=3, total=total_steps)
-                crawl_result = await crawler_service.crawl_directory(
-                    directory_path=type_params["directory_path"],
-                    file_patterns=file_patterns,
-                    recursive=recursive,
-                    progress_callback=dir_progress,
+                paths = output.get_crawl_output_paths(url, session_id)
+                output.save_crawl_outputs(
+                    domain=domain_for_index,
+                    html=getattr(resp, "html", "") or None,
+                    pages=pages,
+                    report=getattr(resp, "metadata", {}) or {},
+                    session_id=session_id,
                 )
-                source_type = SourceType.DIRECTORY
+                output.create_latest_symlink(domain_for_index, session_id)
+                docs_preview = [
+                    {
+                        "url": p.url,
+                        "title": p.title,
+                        "words": p.word_count,
+                    }
+                    for p in pages[:10]
+                ]
 
-            elif crawl_type == "repository":
-                await ctx.info(f"Starting repository crawl: {type_params['repo_url']}")
-
-                # Enhanced progress callback for repository crawler
-                last_reported = [0]
-
-                def repo_progress(
-                    current: int, total: int, message: str | None = None
-                ) -> None:
-                    if (
-                        current - last_reported[0] >= max(1, total // 20)
-                        or current == total
-                    ):
-                        import asyncio
-
-                        try:
-                            # Map repository progress to step 3-4 portion (20-80% of total)
-                            _ = (
-                                3 + (current / total) * 2 if total > 0 else 3
-                            )  # Progress calculation for future use
-                            loop = asyncio.get_event_loop()
-                            if message:
-                                task = loop.create_task(
-                                    ctx.info(f"Repository processing: {message}")
-                                )
-                                _ = task  # Store task reference
-                            last_reported[0] = current
-                        except Exception:
-                            pass
-
-                await ctx.report_progress(progress=3, total=total_steps)
-                crawl_result = await crawler_service.crawl_repository(
-                    repo_url=type_params["repo_url"],
-                    clone_path=clone_path,
-                    file_patterns=file_patterns,
-                    progress_callback=repo_progress,
-                )
-                source_type = SourceType.REPOSITORY
-
-            else:  # website
-                url = type_params["url"]
-
-                # Use config settings for max_pages and max_depth
-                max_pages = settings.crawl_max_pages
-                max_depth = settings.crawl_max_depth
-
-                await ctx.info(
-                    f"Starting website crawl: {url} (max_pages: {max_pages}, max_depth: {max_depth})"
-                )
-
-                # Create crawl request
-                request = CrawlRequest(
-                    url=url,
-                    max_pages=max_pages,
-                    max_depth=max_depth,
-                    include_patterns=include_patterns,
-                    exclude_patterns=exclude_patterns,
-                )
-
-                # Enhanced progress callback for web crawler with multi-stage tracking
-                crawl_phase = ["discovery"]  # discovery, crawling, processing
-                pages_found = [0]
-                last_reported = [0]
-
-                def web_progress(
-                    current: int, total: int, message: str | None = None
-                ) -> None:
-                    if (
-                        current - last_reported[0] >= max(1, total // 20)
-                        or current == total
-                    ):
-                        import asyncio
-
-                        try:
-                            # Determine crawl phase and map to appropriate progress range
-                            if message and "discovered" in message.lower():
-                                crawl_phase[0] = "discovery"
-                                pages_found[0] = total
-                            elif message and any(
-                                word in message.lower()
-                                for word in ["crawling", "processing", "scraped"]
-                            ):
-                                crawl_phase[0] = "crawling"
-
-                            # Map web crawling progress across steps 3-4 (60% of total progress)
-                            if crawl_phase[0] == "discovery":
-                                _ = 3  # Progress step for future use
-                                loop = asyncio.get_event_loop()
-                                task = loop.create_task(
-                                    ctx.info(
-                                        f"Site discovery: Found {total} pages to crawl"
-                                    )
-                                )
-                                _ = task  # Store task reference
-                            else:
-                                # Progress from 3 to 4 based on crawling completion
-                                _ = 3 + (
-                                    current / max(total, 1)
-                                )  # Progress calculation for future use
-                                loop = asyncio.get_event_loop()
-                                if message:
-                                    task = loop.create_task(
-                                        ctx.info(f"Crawling progress: {message}")
-                                    )
-                                    _ = task  # Store task reference
-                                else:
-                                    task = loop.create_task(
-                                        ctx.info(f"Crawled {current}/{total} pages")
-                                    )
-                                    _ = task  # Store task reference
-
-                            last_reported[0] = current
-                        except Exception:
-                            pass
-
-                await ctx.report_progress(progress=3, total=total_steps)
-                crawl_result = await crawler_service.crawl_website(
-                    request, web_progress
-                )
-                source_type = SourceType.WEBPAGE
-
-            # Step 4: Validate crawl results
-            await ctx.info("Validating crawl results")
-            await ctx.report_progress(progress=4, total=total_steps)
-
-            if crawl_result.status not in [CrawlStatus.COMPLETED, "completed"]:
-                raise ToolError(f"Crawl failed: {', '.join(crawl_result.errors)}")
-
-            await ctx.info(
-                f"Crawl completed successfully: {len(crawl_result.pages)} items processed"
-            )
-
-            # Step 5: Process and structure results
-            await ctx.info("Processing and structuring crawl results")
-            await ctx.report_progress(progress=5, total=total_steps)
-            result = _process_crawl_result_unified(crawl_result, crawl_type, target)
-
-            # Step 6: Process with RAG if requested (optional step)
-            if process_with_rag:
-                await ctx.info("Processing results for RAG indexing")
-                await ctx.report_progress(progress=6, total=total_steps)
-                rag_info = await _process_rag_if_requested(
+            elif kind == "directory":
+                root = Path(target).expanduser().resolve()
+                if not root.exists() or not root.is_dir():
+                    raise ToolError(f"Directory does not exist: {root}")
+                pages = await _crawl_directory(
                     ctx,
-                    crawl_result,
-                    source_type,
-                    process_with_rag,
-                    seed_url=target,  # The target is the seed URL for the crawl
-                    crawl_session_id=crawl_session_id,
-                    deduplication=deduplication,
-                    force_update=force_update,
+                    root=root,
+                    include=include_patterns,
+                    exclude=exclude_patterns,
+                    max_files=int(limit),
+                    file_size_limit_bytes=2_000_000,
                 )
-                result.update(rag_info)
+                pages_total = len(pages)
+                pages_failed = 0
+                domain_for_index = f"dir_{root.name}".lower()
+                paths = output.get_crawl_output_paths(
+                    f"https://{domain_for_index}", session_id
+                )
+                output.save_crawl_outputs(
+                    domain=domain_for_index,
+                    html=None,
+                    pages=pages,
+                    report={"kind": "directory", "root": str(root)},
+                    session_id=session_id,
+                )
+                output.create_latest_symlink(domain_for_index, session_id)
+                docs_preview = [
+                    {"url": p.url, "title": p.title, "words": p.word_count}
+                    for p in pages[:10]
+                ]
 
-            # Final step: Complete and report
-            final_step = 6 if process_with_rag else 5
-            await ctx.info("Finalizing crawl operation")
-            await ctx.report_progress(progress=final_step, total=total_steps)
+            elif kind == "repository":
+                pages: list[PageContent]
+                tmp: Path
+                pages, tmp = await _crawl_repository(
+                    ctx,
+                    repo_url=target,
+                    include=include_patterns,
+                    exclude=exclude_patterns,
+                    max_files=int(limit),
+                    file_size_limit_bytes=2_000_000,
+                )
+                try:
+                    repo_name = tmp.name
+                except Exception:
+                    repo_name = "repo"
+                pages_total = len(pages)
+                pages_failed = 0
+                domain_for_index = f"repo_{repo_name}".lower()
+                paths = output.get_crawl_output_paths(
+                    f"https://{domain_for_index}", session_id
+                )
+                output.save_crawl_outputs(
+                    domain=domain_for_index,
+                    html=None,
+                    pages=pages,
+                    report={"kind": "repository", "repo": target},
+                    session_id=session_id,
+                )
+                output.create_latest_symlink(domain_for_index, session_id)
+                docs_preview = [
+                    {"url": p.url, "title": p.title, "words": p.word_count}
+                    for p in pages[:10]
+                ]
+                # Cleanup
+                shutil.rmtree(tmp, ignore_errors=True)
 
-            duration = result.get("statistics", {}).get(
-                "processing_time"
-            ) or result.get("statistics", {}).get("crawl_duration_seconds", 0)
-            items_count = result.get("pages_crawled") or result.get(
-                "files_processed", 0
-            )
-            await ctx.info(
-                f"Crawl completed successfully: {items_count} items in {duration:.1f}s"
-            )
+            else:  # pragma: no cover - exhaustiveness
+                raise ToolError(f"Unsupported target: {target}")
 
-            return result
+            await ctx.info("Finalizing outputs...")
+            await ctx.report_progress(progress=95, total=100)
 
-        except Exception as e:
-            error_msg = f"{crawl_type.capitalize()} crawl failed: {e!s}"
-            await ctx.info(error_msg)
-            raise ToolError(error_msg) from e
+            # Update index
+            if domain_for_index:
+                output.update_index(
+                    domain_for_index,
+                    {
+                        "target": target,
+                        "kind": kind,
+                        "pages": pages_total,
+                        "rag_enabled": rag_enabled,
+                    },
+                    session_id,
+                )
 
+            await ctx.report_progress(progress=100, total=100)
+
+            return {
+                "success": success,
+                "kind": kind,
+                "target": target,
+                "stats": {
+                    "processed": pages_total,
+                    "failed": pages_failed,
+                    "duration_s": duration_s,
+                },
+                "outputs": None
+                if not paths
+                else {
+                    "manifest_path": str(paths.get("report", "")),
+                    "content_dir": str(Path(paths["ndjson"]).parent),
+                    "ndjson_path": str(paths.get("ndjson", "")),
+                    "html_path": str(paths.get("html", "")),
+                },
+                "docs_preview": docs_preview,
+                "warnings": [],
+                "rag": {"enabled": rag_enabled},
+            }
         finally:
-            progress_middleware.remove_tracker(progress_tracker.operation_id)
+            progress_middleware.remove_tracker(tracker.operation_id)

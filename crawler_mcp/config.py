@@ -45,7 +45,10 @@ class CrawlerMCPSettings(BaseSettings):
     qdrant_timeout: float = Field(default=10.0, alias="QDRANT_TIMEOUT")
     qdrant_retry_count: int = Field(default=3, alias="QDRANT_RETRY_COUNT")
     qdrant_connection_pool_size: int = Field(
-        default=16, alias="QDRANT_CONNECTION_POOL_SIZE", ge=1, le=32
+        default=32,
+        alias="QDRANT_CONNECTION_POOL_SIZE",
+        ge=1,
+        le=64,  # Maximized for high-end hardware
     )
     # Unified batch configuration for optimal performance
     default_batch_size: int = Field(
@@ -59,7 +62,10 @@ class CrawlerMCPSettings(BaseSettings):
         default=256, alias="QDRANT_BATCH_SIZE", ge=64, le=512
     )
     qdrant_prefetch_size: int = Field(
-        default=1024, alias="QDRANT_PREFETCH_SIZE", ge=256, le=2048
+        default=2048,
+        alias="QDRANT_PREFETCH_SIZE",
+        ge=256,
+        le=4096,  # Doubled for better memory utilization
     )
     qdrant_search_exact: bool = Field(default=False, alias="QDRANT_SEARCH_EXACT")
 
@@ -69,7 +75,8 @@ class CrawlerMCPSettings(BaseSettings):
     tei_url: str = Field(default="http://localhost:8080", alias="TEI_URL")
     tei_model: str = Field(default="Qwen/Qwen3-Embedding-0.6B", alias="TEI_MODEL")
     tei_max_concurrent_requests: int = Field(
-        default=128, alias="TEI_MAX_CONCURRENT_REQUESTS"
+        default=256,
+        alias="TEI_MAX_CONCURRENT_REQUESTS",  # Doubled for RTX 4070 performance
     )
     tei_max_batch_tokens: int = Field(default=32768, alias="TEI_MAX_BATCH_TOKENS")
     tei_tokens_per_item: int = Field(
@@ -80,7 +87,8 @@ class CrawlerMCPSettings(BaseSettings):
         description="Estimated tokens per embedding item for batch size calculation",
     )
     tei_batch_size: int = Field(
-        default=256, alias="TEI_BATCH_SIZE"
+        default=512,
+        alias="TEI_BATCH_SIZE",  # Increased for better GPU utilization
     )  # Will be validated against TEI_MAX_BATCH_TOKENS
     tei_timeout: float = Field(default=30.0, alias="TEI_TIMEOUT")
 
@@ -112,7 +120,9 @@ class CrawlerMCPSettings(BaseSettings):
         le=5.0,
         description="Base for exponential backoff calculation",
     )
-    embedding_workers: int = Field(default=4, alias="EMBEDDING_WORKERS", ge=1, le=16)
+    embedding_workers: int = Field(
+        default=8, alias="EMBEDDING_WORKERS", ge=1, le=16
+    )  # Doubled for better concurrency
 
     # Chunking Configuration
     chunk_size: int = Field(default=1024, alias="CHUNK_SIZE", gt=0, le=32768)
@@ -152,14 +162,6 @@ class CrawlerMCPSettings(BaseSettings):
         if not 1 <= v <= 20:
             raise ValueError("browser_pool_size must be between 1 and 20")
         return v
-
-    @field_validator("browser_type")
-    @classmethod
-    def validate_browser_type(cls, v: str) -> str:
-        allowed_types = {"chromium", "firefox", "webkit"}
-        if v.lower() not in allowed_types:
-            raise ValueError(f"browser_type must be one of {allowed_types}")
-        return v.lower()
 
     @field_validator("browser_extra_args")
     @classmethod
@@ -216,7 +218,9 @@ class CrawlerMCPSettings(BaseSettings):
     crawl_browser: str = Field(default="chromium", alias="CRAWL_BROWSER")
     crawl_max_pages: int = Field(default=1000, alias="CRAWL_MAX_PAGES")
     crawl_max_depth: int = Field(default=3, alias="CRAWL_MAX_DEPTH")
-    max_concurrent_crawls: int = Field(default=25, alias="MAX_CONCURRENT_CRAWLS")
+    max_concurrent_crawls: int = Field(
+        default=25, alias="MAX_CONCURRENT_CRAWLS"
+    )  # Restored to 25 for RTX 4070 + i7-13700k
     crawler_delay: float = Field(default=0.1, alias="CRAWLER_DELAY")
     crawler_timeout: float = Field(default=30.0, alias="CRAWLER_TIMEOUT")
     crawl_min_words: int = Field(default=50, alias="CRAWL_MIN_WORDS")
@@ -248,18 +252,20 @@ class CrawlerMCPSettings(BaseSettings):
     crawl_scroll_count: int = Field(default=20, alias="CRAWL_SCROLL_COUNT")
     crawl_scroll_delay: int = Field(default=50, alias="CRAWL_SCROLL_DELAY")
     crawl_virtual_scroll_batch_size: int = Field(
-        default=10, alias="CRAWL_VIRTUAL_SCROLL_BATCH_SIZE"
+        default=20,
+        alias="CRAWL_VIRTUAL_SCROLL_BATCH_SIZE",  # Doubled for high-end hardware
     )
-    crawl_memory_threshold: float = Field(default=70.0, alias="CRAWL_MEMORY_THRESHOLD")
+    crawl_memory_threshold: float = Field(
+        default=70.0, alias="CRAWL_MEMORY_THRESHOLD"
+    )  # Conservative threshold to prevent swapping
 
     # Performance Optimization Configuration
     crawl_enable_streaming: bool = Field(default=True, alias="CRAWL_ENABLE_STREAMING")
-    crawl_enable_caching: bool = Field(default=True, alias="CRAWL_ENABLE_CACHING")
+    crawl_enable_caching: bool = Field(
+        default=True, alias="CRAWL_ENABLE_CACHING"
+    )  # Re-enabled for performance with repeated URLs
 
     # Browser Configuration
-    browser_headless: bool = Field(default=True, alias="BROWSER_HEADLESS")
-    browser_type: str = Field(default="chromium", alias="BROWSER_TYPE")
-    browser_verbose: bool = Field(default=False, alias="BROWSER_VERBOSE")
     browser_extra_args: list[str] = Field(
         default_factory=list, alias="BROWSER_EXTRA_ARGS"
     )
@@ -268,31 +274,24 @@ class CrawlerMCPSettings(BaseSettings):
     )
 
     # High-Performance Configuration (i7-13700k + RTX 4070)
-    browser_pool_size: int = Field(default=8, alias="BROWSER_POOL_SIZE", ge=1, le=16)
+    browser_pool_size: int = Field(
+        default=4, alias="BROWSER_POOL_SIZE", ge=1, le=20
+    )  # Optimized for CPU efficiency (4 browsers x 6 threads = 24)
     file_processing_threads: int = Field(
-        default=16, alias="FILE_PROCESSING_THREADS", ge=1, le=24
+        default=24,
+        alias="FILE_PROCESSING_THREADS",
+        ge=1,
+        le=32,  # Increased for i7-13700k (24 threads)
     )
-    crawl_concurrency: int = Field(default=12, alias="CRAWL_CONCURRENCY", ge=1, le=50)
+    crawl_concurrency: int = Field(
+        default=8, alias="CRAWL_CONCURRENCY", ge=1, le=50
+    )  # Optimized for CPU efficiency without oversubscription
     content_cache_size_gb: int = Field(
-        default=8, alias="CONTENT_CACHE_SIZE_GB", ge=1, le=16
+        default=16,
+        alias="CONTENT_CACHE_SIZE_GB",
+        ge=1,
+        le=32,  # Doubled for 32GB+ RAM
     )
-    gpu_memory_fraction: float = Field(
-        default=0.95, alias="GPU_MEMORY_FRACTION", ge=0.1, le=1.0
-    )
-
-    # RTX 4070 GPU Acceleration Configuration
-    gpu_acceleration: bool = Field(
-        default=True,
-        alias="GPU_ACCELERATION",
-        description="Enable GPU acceleration features",
-    )
-    crawl_gpu_enabled: bool = Field(
-        default=True,
-        alias="CRAWL_GPU_ENABLED",
-        description="Enable GPU acceleration for web crawling",
-    )
-    # Chrome flags removed - Crawl4AI light_mode handles optimization
-    # GPU management removed - let Crawl4AI handle GPU acceleration
 
     # Alternative crawling approach settings
     use_arun_many_for_sitemaps: bool = Field(
@@ -301,7 +300,7 @@ class CrawlerMCPSettings(BaseSettings):
         description="Use arun_many() with sitemap URLs instead of BFSDeepCrawlStrategy",
     )
     max_concurrent_sessions: int = Field(
-        default=20,
+        default=15,  # Optimized for RTX 4070 + i7-13700k hardware
         alias="CRAWL_MAX_CONCURRENT_SESSIONS",
         ge=1,
         le=50,
@@ -320,9 +319,9 @@ class CrawlerMCPSettings(BaseSettings):
         description="Enable light mode to optimize browser performance",
     )
     crawl_enable_gpu: bool = Field(
-        default=False,
+        default=True,
         alias="CRAWL_ENABLE_GPU",
-        description="Enable GPU acceleration for browsers (requires GPU support)",
+        description="Enable GPU acceleration for browsers (optimized for performance)",
     )
     use_lxml_strategy: bool = Field(
         default=True,
@@ -366,15 +365,11 @@ class CrawlerMCPSettings(BaseSettings):
     # Content Filtering Configuration - Clean Markdown Generation
     crawl_excluded_tags: list[str] = Field(
         default=[
-            "nav",
-            "header",
-            "footer",
-            "aside",
             "script",
             "style",
         ],
         alias="CRAWL_EXCLUDED_TAGS",
-        description="HTML tags to exclude during content extraction for cleaner markdown",
+        description="HTML tags to exclude during content extraction (optimized for crawl4ai - only exclude script/style)",
     )
 
     crawl_strict_ui_filtering: bool = Field(
@@ -483,19 +478,19 @@ class CrawlerMCPSettings(BaseSettings):
     )
 
     crawl_pruning_threshold: float = Field(
-        default=0.48,
+        default=0.25,
         alias="CRAWL_PRUNING_THRESHOLD",
         ge=0.0,
         le=1.0,
-        description="Threshold for content relevance in PruningContentFilter (0.48 = optimal for documentation sites)",
+        description="Threshold for content relevance in PruningContentFilter (0.25 = keep 75% of content, optimized for crawl4ai)",
     )
 
     crawl_min_word_threshold: int = Field(
-        default=20,
+        default=3,
         alias="CRAWL_MIN_WORD_THRESHOLD",
-        ge=5,
+        ge=3,
         le=100,
-        description="Minimum words required for content blocks to be included (20 = filters UI elements)",
+        description="Minimum words required for content blocks to be included (3 = optimized for crawl4ai content filtering)",
     )
 
     crawl_prefer_fit_markdown: bool = Field(
@@ -697,6 +692,9 @@ class CrawlerMCPSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_file=(
+            # Prefer package-level .env; also read legacy optimized/.env if present
+            Path(__file__).parent / ".env",
+            Path(__file__).parent / "crawlers" / "optimized" / ".env",
             Path(__file__).parent.parent / ".env",  # Project root .env
             ".env",  # Current directory .env as fallback
         ),

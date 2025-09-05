@@ -1,0 +1,941 @@
+[2025-09-04T02:24:10] Code v0.2.56
+--------
+workdir: /home/jmagar/code/crawl-mcp
+model: gpt-5
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: medium
+reasoning summaries: auto
+--------
+[2025-09-04T02:24:10] User instructions:
+Context: Service: crawler_mcp. Goal: introduce two tools (scrape, crawl) under optimized, replacing legacy crawling surface. Server is already moved under optimized. Planning-only; do not modify files.
+
+Agent: You are one of three parallel planning agents. Design an implementation-ready plan (not code) for two MCP tools to be added under the optimized namespace:
+
+1) "scrape" — Single Page Intelligence: extract content from an individual web page with AI-aware extraction tuned for our optimized stack.
+2) "crawl" — Unified Smart Crawling: auto-detects input type and crawls websites, repositories, directories, and GitHub PRs/reviews/comments (leveraging existing optimized GitHub tooling) with one entry point.
+
+Hard requirements
+- Implement both tools inside `crawler_mcp/crawlers/optimized/tools/` and expose via a single `register_crawling_tools(mcp: FastMCP) -> None` that registers `scrape` and `crawl`.
+- Wire `register_crawling_tools` into `crawler_mcp/crawlers/optimized/server.py` alongside existing registrations.
+- Use optimized core components only (no legacy `crawler_mcp/tools/crawling.py` or `core/orchestrator.py`).
+- Respect existing output conventions via `OutputManager` and logging via `LogManager`.
+- Progress reporting must use `progress_middleware` and `ctx.report_progress` with clear phases.
+- Responses must be compact (preview + paths) and typed; save full manifests to disk.
+- Keep RAG ingestion optional and decoupled (flag `rag_ingest: bool = False`).
+
+Repository snapshot (key paths)
+- Server: `crawler_mcp/crawlers/optimized/server.py` (entry, currently registers `github_pr_tools` and `rag`)
+- Config: `crawler_mcp/crawlers/optimized/config.py` (OptimizedConfig)
+- Execution: `crawler_mcp/crawlers/optimized/core/strategy.py`, `parallel_engine.py`
+- Browser/IO: `crawler_mcp/crawlers/optimized/factories/browser_factory.py`, `utils/output_manager.py`, `utils/log_manager.py`
+- CLI reference: `crawler_mcp/crawlers/optimized/cli/crawl.py` (parameter names/semantics)
+- Models: `crawler_mcp/models/{crawl.py, rag.py, sources.py}`
+- GitHub PR tools (for PR part of unified crawl): `crawler_mcp/crawlers/optimized/tools/github_pr_tools.py`
+
+Key constraints & design notes
+- "scrape": no queue; fetch single URL; optional snapshots/screenshots; return key signals (title, lang, word_count, content_excerpt), disk paths.
+- "crawl": detect input type: URL (http/https) -> website strategy; path -> directory; git URL or git-like -> repo; PR input formats -> GitHub PR tool path. Return unified schema with `kind` and stats per type.
+- Parameter clamping/sanity checks; surface-friendly ToolError messages.
+- Performance & memory: rely on OptimizedConfig’s concurrency/limits; use monitoring helpers where applicable.
+
+Deliverables from you
+- Phased implementation plan with file layout, API signatures for both tools, parameter lists with safe defaults and validation rules, structured result schemas, progress phase mapping, and error handling approach.
+- Import map into optimized core; list exactly which classes/functions you’d call.
+- Test plan (unit + integration) and a cutover checklist.
+
+You may assume Python 3.11+, Ruff+Mypy strict, FastAPI/FastMCP. Provide concise, actionable steps.
+
+
+Desired output: Concrete plan: phases + file layout + signatures + parameter rules + result schema + progress mapping + test/cutover steps.
+
+Files to consider: crawler_mcp/crawlers/optimized/server.py, crawler_mcp/crawlers/optimized/config.py, crawler_mcp/crawlers/optimized/core/strategy.py, crawler_mcp/crawlers/optimized/utils/output_manager.py, crawler_mcp/crawlers/optimized/cli/crawl.py, crawler_mcp/crawlers/optimized/tools/github_pr_tools.py, crawler_mcp/models/crawl.py
+
+[Running in read-only mode - no modifications allowed]
+[2025-09-04T02:24:14] codex
+
+I’m going to scan the optimized crawler package to align the plan with existing config, strategies, utils, and the server/tool patterns.
+[2025-09-04T02:24:15] exec bash -lc 'ls -la' in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:15] bash -lc 'ls -la' succeeded in 31ms:
+total 864
+drwxr-xr-x 15 jmagar jmagar   4096 Sep  3 21:21 .
+drwxr-xr-x 38 jmagar jmagar   4096 Aug 31 17:21 ..
+drwxr-xr-x  5 jmagar jmagar   4096 Aug 19 13:55 .cache
+drwxr-xr-x  2 jmagar jmagar   4096 Aug 30 21:33 .claude
+drwxr-xr-x  3 jmagar jmagar   4096 Sep  3 21:21 .code
+-rw-r--r--  1 jmagar jmagar  69632 Sep  3 00:41 .coverage
+-rw-rw-r--  1 jmagar jmagar   6577 Sep  3 16:59 .env
+-rw-r--r--  1 jmagar jmagar   5664 Sep  3 16:26 .env.example
+drwxr-xr-x  8 jmagar jmagar   4096 Sep  3 22:24 .git
+-rw-r--r--  1 jmagar jmagar   1781 Sep  3 16:28 .gitignore
+-rw-r--r--  1 jmagar jmagar    720 Aug 14 18:16 .pre-commit-config.yaml
+drwxrwxr-x  6 jmagar jmagar   4096 Aug 10 21:48 .venv
+-rw-r--r--  1 jmagar jmagar   2976 Sep  3 21:47 AGENTS.md
+-rw-rw-r--  1 jmagar jmagar   8755 Sep  3 21:47 CLAUDE.md
+-rw-r--r--  1 jmagar jmagar   2721 Sep  3 16:28 Dockerfile
+-rw-r--r--  1 jmagar jmagar  15404 Sep  3 21:48 README.md
+drwxr-xr-x 11 jmagar jmagar   4096 Sep  3 21:47 crawler_mcp
+drwxr-xr-x  2 jmagar jmagar   4096 Sep  3 22:07 crawler_mcp.egg-info
+-rw-r--r--  1 jmagar jmagar   3870 Sep  3 16:28 docker-compose.yml
+[2025-09-04T02:24:15] tokens used: 9131
+[2025-09-04T02:24:16] exec bash -lc 'rg -n "optimized/server.py|optimized/config.py|optimized/core/strategy.py|optimized/cli/crawl.py|optimized/tools/github_pr_tools.py|models/crawl.py" -S crawler_mcp -n --no-heading' in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:16] bash -lc 'rg -n "optimized/server.py|optimized/config.py|optimized/core/strategy.py|optimized/cli/crawl.py|optimized/tools/github_pr_tools.py|models/crawl.py" -S crawler_mcp -n --no-heading' succeeded in 41ms:
+crawler_mcp/crawlers/optimized/AGENTS.md:7:- Entry points: `crawler_mcp/crawlers/optimized/server.py` (MCP server), `crawler_mcp/webhook/server.py` (webhook).
+crawler_mcp/crawlers/optimized/AGENTS.md:8:- MCP tools live in `crawler_mcp/crawlers/optimized/tools/` and are registered in `crawler_mcp/crawlers/optimized/server.py`.
+crawler_mcp/crawlers/optimized/AGENTS.md:12:- Run server (dev): `fastmcp dev crawler_mcp/crawlers/optimized/server.py`
+crawler_mcp/crawlers/optimized/AGENTS.md:43:- Install for Claude Desktop: `fastmcp install claude-desktop crawler_mcp/crawlers/optimized/server.py`.
+[2025-09-04T02:24:16] tokens used: 1090
+
+[2025-09-04T02:24:18] thinking
+
+**Optimizing folder structure**
+
+It seems the ripgrep didn't show the files I was hoping for. So, I think it's best to create an optimized folder tree layout. This way, I can better organize the files, making it easier to navigate and find what I'm looking for. I wonder what the most efficient way to display this structure would be. I'll focus on clarity and efficiency in the layout for the best results!
+[2025-09-04T02:24:19] exec bash -lc "ls -la crawler_mcp/crawlers/optimized && printf \"\\n-- tools --\\n\" && ls -la crawler_mcp/crawlers/optimized/tools || true" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:19] bash -lc "ls -la crawler_mcp/crawlers/optimized && printf \"\\n-- tools --\\n\" && ls -la crawler_mcp/crawlers/optimized/tools || true" succeeded in 75ms:
+total 208
+drwxr-xr-x 17 jmagar jmagar  4096 Sep  3 21:46 .
+drwxr-xr-x  4 jmagar jmagar  4096 Sep  1 18:30 ..
+drwxr-xr-x  2 jmagar jmagar  4096 Sep  3 20:47 .claude
+-rw-r--r--  1 jmagar jmagar 69632 Sep  3 07:10 .coverage
+-rw-r--r--  1 jmagar jmagar  1770 Sep  1 17:27 .env
+-rw-r--r--  1 jmagar jmagar  1864 Sep  1 10:24 .env.example
+-rw-r--r--  1 jmagar jmagar  2727 Sep  3 21:48 AGENTS.md
+-rw-r--r--  1 jmagar jmagar 20386 Sep  3 10:37 README.md
+-rw-r--r--  1 jmagar jmagar  2336 Sep  1 17:32 __init__.py
+drwxr-xr-x  2 jmagar jmagar  4096 Sep  3 21:56 __pycache__
+drwxr-xr-x  3 jmagar jmagar  4096 Sep  3 10:37 cli
+drwxr-xr-x  3 jmagar jmagar  4096 Sep  3 16:00 clients
+-rw-r--r--  1 jmagar jmagar 18166 Sep  2 09:50 config.py
+drwxr-xr-x  3 jmagar jmagar  4096 Sep  3 18:38 core
+drwxr-xr-x  3 jmagar jmagar  4096 Sep  1 17:06 factories
+drwxr-xr-x  2 jmagar jmagar  4096 Sep  2 09:21 logs
+drwxr-xr-x  3 jmagar jmagar  4096 Sep  3 22:06 middleware
+drwxr-xr-x  3 jmagar jmagar  4096 Sep  2 20:38 models
+drwxr-xr-x  6 jmagar jmagar  4096 Sep  2 09:21 output
+[2025-09-04T02:24:19] tokens used: 457
+[2025-09-04T02:24:21] exec bash -lc "sed -n '1,220p' crawler_mcp/crawlers/optimized/server.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:21] bash -lc "sed -n '1,220p' crawler_mcp/crawlers/optimized/server.py" succeeded in 27ms:
+"""
+Optimized Crawler MCP FastMCP Server
+
+Consolidated server that registers tools from the optimized package and
+re-homes middleware and RAG tools under `crawler_mcp.crawlers.optimized`.
+"""
+
+import os
+
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+
+import atexit
+import asyncio
+import logging
+import signal
+import subprocess
+import sys
+from pathlib import Path
+from typing import Any
+
+[2025-09-04T02:24:21] tokens used: 1126
+[2025-09-04T02:24:22] exec bash -lc "sed -n '220,520p' crawler_mcp/crawlers/optimized/server.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:22] bash -lc "sed -n '220,520p' crawler_mcp/crawlers/optimized/server.py" succeeded in 20ms:
+        webhook_process = subprocess.Popen(
+            [sys.executable, "-m", "crawler_mcp.webhook.server"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+        )
+        logger.info("Webhook server started with PID %s", webhook_process.pid)
+    except Exception as e:
+        logger.error("Failed to start webhook server: %s", e)
+        webhook_process = None
+
+
+async def startup_checks() -> None:
+    # Placeholders for any async startup checks in the future
+    return None
+
+
+def main() -> None:
+    try:
+        console = Console()
+        console.print("")
+[2025-09-04T02:24:22] tokens used: 2113
+[2025-09-04T02:24:24] exec bash -lc "sed -n '1,260p' crawler_mcp/crawlers/optimized/config.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:24] bash -lc "sed -n '1,260p' crawler_mcp/crawlers/optimized/config.py" succeeded in 28ms:
+"""
+Configuration management for optimized high-performance web crawler.
+
+This module provides centralized configuration management for the optimized crawler,
+including URL discovery, concurrency, content extraction, and performance settings.
+"""
+
+import os
+from dataclasses import dataclass, field
+from typing import Any
+
+
+@dataclass
+class OptimizedConfig:
+    """Configuration for optimized crawler with high-performance defaults"""
+
+    # URL Discovery Configuration
+    max_urls_to_discover: int = 1000
+    """Maximum number of URLs to discover from sitemaps before crawling"""
+
+[2025-09-04T02:24:24] tokens used: 537
+[2025-09-04T02:24:25] exec bash -lc "sed -n '260,680p' crawler_mcp/crawlers/optimized/config.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:25] bash -lc "sed -n '260,680p' crawler_mcp/crawlers/optimized/config.py" succeeded in 24ms:
+
+    max_domain_backups: int = 1
+    """Number of backup copies to keep per domain (latest + N backups)"""
+
+    max_output_size_gb: float = 1.0
+    """Maximum total size of output directory in GB before cleanup"""
+
+    log_rotation_size_mb: int = 10
+    """Log file rotation size in MB"""
+
+    log_rotation_backups: int = 3
+    """Number of rotated log backups to keep (.1, .2, .3)"""
+
+    cache_retention_hours: int = 24
+    """Cache file retention time in hours"""
+
+    auto_cleanup: bool = True
+    """Enable automatic cleanup when size limits are exceeded"""
+
+    @classmethod
+[2025-09-04T02:24:25] tokens used: 2757
+[2025-09-04T02:24:27] exec bash -lc "ls -la crawler_mcp/crawlers/optimized/core && sed -n '1,260p' crawler_mcp/crawlers/optimized/core/strategy.py && printf \"\\n-- parallel_engine --\\n\" && sed -n '1,240p' crawler_mcp/crawlers/optimized/core/parallel_engine.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:28] bash -lc "ls -la crawler_mcp/crawlers/optimized/core && sed -n '1,260p' crawler_mcp/crawlers/optimized/core/strategy.py && printf \"\\n-- parallel_engine --\\n\" && sed -n '1,240p' crawler_mcp/crawlers/optimized/core/parallel_engine.py" succeeded in 43ms:
+total 140
+drwxr-xr-x  3 jmagar jmagar  4096 Sep  3 18:38 .
+drwxr-xr-x 17 jmagar jmagar  4096 Sep  3 21:46 ..
+-rw-r--r--  1 jmagar jmagar   264 Sep  1 17:32 __init__.py
+drwxr-xr-x  2 jmagar jmagar  4096 Sep  3 18:40 __pycache__
+-rw-r--r--  1 jmagar jmagar  3575 Sep  1 17:32 adaptive_dispatcher.py
+-rw-r--r--  1 jmagar jmagar  5766 Sep  3 18:37 batch_utils.py
+-rw-r--r--  1 jmagar jmagar 30241 Sep  1 17:32 parallel_engine.py
+-rw-r--r--  1 jmagar jmagar 80159 Sep  3 18:38 strategy.py
+"""
+Main orchestrator strategy for optimized high-performance web crawler.
+
+This module implements the main crawler strategy that inherits from Crawl4AI's
+AsyncCrawlerStrategy and orchestrates all components for maximum performance.
+"""
+
+import asyncio
+import logging
+import math
+import os
+[2025-09-04T02:24:28] tokens used: 2489
+
+[2025-09-04T02:24:30] thinking
+
+**Exploring system components**
+
+I’m thinking about the necessity of an output manager and a log manager for the system. It's crucial to have progress middleware to track the progress of tasks effectively. Additionally, I want to focus on models for crawling, which would help gather the required data more efficiently. Also, checking out the github_pr_tools for understanding how they register is important too. I need to ensure all these components work smoothly together!
+[2025-09-04T02:24:31] exec bash -lc "sed -n '1,220p' crawler_mcp/crawlers/optimized/utils/output_manager.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:31] bash -lc "sed -n '1,220p' crawler_mcp/crawlers/optimized/utils/output_manager.py" succeeded in 40ms:
+"""Output management for the optimized crawler.
+
+Provides standardized output organization, rotation, and cleanup.
+"""
+
+from __future__ import annotations
+
+import json
+import shutil
+import time
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+from ..config import OptimizedConfig
+
+
+class OutputManager:
+    """Manages all output files with automatic rotation and cleanup."""
+
+[2025-09-04T02:24:31] tokens used: 4414
+[2025-09-04T02:24:33] exec bash -lc "sed -n '220,560p' crawler_mcp/crawlers/optimized/utils/output_manager.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:33] bash -lc "sed -n '220,560p' crawler_mcp/crawlers/optimized/utils/output_manager.py" succeeded in 19ms:
+            # Save index
+            with open(self.crawls_index, "w", encoding="utf-8") as f:
+                json.dump(index, f, ensure_ascii=False, indent=2)
+
+        except Exception as e:
+            print(f"Warning: Failed to update index for {domain}: {e}")
+
+    def _get_domain_size(self, domain: str) -> int:
+        """Get total size of domain directory in bytes."""
+        domain_dir = self.crawls_dir / domain
+        if not domain_dir.exists():
+            return 0
+
+        total_size = 0
+        for file_path in domain_dir.rglob("*"):
+            if file_path.is_file():
+                try:
+                    total_size += file_path.stat().st_size
+                except OSError:
+                    continue
+[2025-09-04T02:24:33] tokens used: 1974
+[2025-09-04T02:24:35] exec bash -lc "sed -n '1,320p' crawler_mcp/crawlers/optimized/utils/log_manager.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:35] bash -lc "sed -n '1,320p' crawler_mcp/crawlers/optimized/utils/log_manager.py" succeeded in 23ms:
+"""Log management for the optimized crawler.
+
+Provides rotating log files with size-based rotation.
+"""
+
+from __future__ import annotations
+
+import logging
+import logging.handlers
+from pathlib import Path
+
+
+class LogManager:
+    """Manages crawler logging with automatic rotation."""
+
+    def __init__(self, log_dir: str = "./output/logs"):
+        """Initialize logging configuration.
+
+        Args:
+            log_dir: Directory for log files
+[2025-09-04T02:24:35] tokens used: 1371
+[2025-09-04T02:24:36] exec bash -lc "sed -n '1,260p' crawler_mcp/crawlers/optimized/cli/crawl.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:36] bash -lc "sed -n '1,260p' crawler_mcp/crawlers/optimized/cli/crawl.py" succeeded in 28ms:
+"""
+CLI runner for the optimized crawler.
+
+Usage:
+  uv run python -m crawler_mcp.crawlers.optimized.run \
+      --url https://gofastmcp.com \
+      --output-html crawl_all.html \
+      --output-ndjson pages.ndjson \
+      --concurrency 16 \
+      --max-urls 1000 \
+      --content-validation false \
+      --doc-relax "/python-sdk/" --doc-relax "/servers/" --doc-relax "/integrations/"
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import logging
+import os
+[2025-09-04T02:24:36] tokens used: 2034
+[2025-09-04T02:24:40] exec bash -lc "sed -n '260,800p' crawler_mcp/crawlers/optimized/cli/crawl.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:40] bash -lc "sed -n '260,800p' crawler_mcp/crawlers/optimized/cli/crawl.py" succeeded in 73ms:
+    p.add_argument(
+        "--context-start", type=int, default=1, help="Start line for --get-file-context"
+    )
+    p.add_argument(
+        "--context-end", type=int, default=1, help="End line for --get-file-context"
+    )
+    p.add_argument(
+        "--apply-suggestions",
+        default=None,
+        choices=["dry-run", "commit"],
+        help="Apply suggestions from --items-ndjson",
+    )
+    p.add_argument(
+        "--items-ndjson",
+        default=None,
+        help="Path to NDJSON items produced by --output-ndjson",
+    )
+    p.add_argument(
+        "--only-authors",
+        default=None,
+[2025-09-04T02:24:40] tokens used: 2422
+[2025-09-04T02:24:42] exec bash -lc "sed -n '800,1400p' crawler_mcp/crawlers/optimized/cli/crawl.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:42] bash -lc "sed -n '800,1400p' crawler_mcp/crawlers/optimized/cli/crawl.py" succeeded in 25ms:
+    crawl_logger = log_mgr.setup_crawl_logger()
+    error_logger = log_mgr.setup_error_logger()
+    console_logger = log_mgr.setup_console_logger()
+
+    # Clean outputs if requested
+    if args.clean_outputs:
+        console_logger.info("Cleaning output directory...")
+        output_mgr.cleanup_old_outputs()
+        output_mgr.clean_cache()
+
+    # Get domain for output management
+    domain = output_mgr.sanitize_domain(args.url)
+
+    # Rotate backup before crawl (unless --no-backup)
+    if not args.no_backup:
+        output_mgr.rotate_crawl_backup(domain)
+
+    crawl_logger.info(f"Starting crawl for {args.url}")
+    crawl_logger.info(f"Output directory: {args.output_dir}")
+    crawl_logger.info(f"Domain: {domain}")
+[2025-09-04T02:24:42] tokens used: 5557
+[2025-09-04T02:24:44] exec bash -lc "sed -n '1,220p' crawler_mcp/crawlers/optimized/tools/github_pr_tools.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:44] bash -lc "sed -n '1,220p' crawler_mcp/crawlers/optimized/tools/github_pr_tools.py" succeeded in 26ms:
+from __future__ import annotations
+
+import contextlib
+import fnmatch
+import json
+import os
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from fastmcp import Context, FastMCP
+
+from ..clients.github_client import GitHubClient
+from ..clients.qdrant_http_client import QdrantClient
+from ..utils.github_suggestions import (
+    apply_suggestion as _apply_sugg,
+)
+from ..utils.github_suggestions import (
+    extract_suggestions,
+)
+[2025-09-04T02:24:44] tokens used: 2868
+[2025-09-04T02:24:46] exec bash -lc "sed -n '220,760p' crawler_mcp/crawlers/optimized/tools/github_pr_tools.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:46] bash -lc "sed -n '220,760p' crawler_mcp/crawlers/optimized/tools/github_pr_tools.py" succeeded in 22ms:
+          - only_unresolved: true
+          - min_length: 20
+          - after/before: ISO timestamps
+        """
+        items = await list_pr_items_impl(owner, repo, pr_number)
+        # Merge local resolved registry flags
+        reg = _load_registry().get(f"{owner}/{repo}#{pr_number}", {})
+        for it in items:
+            iid = str(it.get("item_id") or it.get("canonical_url") or "")
+            if iid and iid in reg:
+                it["is_resolved"] = bool(reg.get(iid))
+        return _apply_filters(items, filters)
+
+    @mcp.tool
+    async def get_file_context(
+        ctx: Context,
+        owner: str,
+        repo: str,
+        ref: str,
+        path: str,
+[2025-09-04T02:24:46] tokens used: 2324
+[2025-09-04T02:24:48] exec bash -lc "sed -n '1,200p' crawler_mcp/crawlers/optimized/tools/rag.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:48] bash -lc "sed -n '1,200p' crawler_mcp/crawlers/optimized/tools/rag.py" succeeded in 19ms:
+"""
+FastMCP tools for RAG operations (optimized namespace).
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+from fastmcp import Context, FastMCP
+from fastmcp.exceptions import ToolError
+
+from ....core import RagService, VectorService
+from ....models.rag import RagQuery
+from ..middleware.progress import progress_middleware
+
+logger = logging.getLogger(__name__)
+
+
+def register_rag_tools(mcp: FastMCP) -> None:
+[2025-09-04T02:24:49] tokens used: 2658
+[2025-09-04T02:24:50] exec bash -lc "ls -la crawler_mcp/crawlers/optimized/middleware && sed -n '1,220p' crawler_mcp/crawlers/optimized/middleware/progress.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:50] bash -lc "ls -la crawler_mcp/crawlers/optimized/middleware && sed -n '1,220p' crawler_mcp/crawlers/optimized/middleware/progress.py" succeeded in 27ms:
+total 28
+drwxr-xr-x  3 jmagar jmagar 4096 Sep  3 22:06 .
+drwxr-xr-x 17 jmagar jmagar 4096 Sep  3 21:46 ..
+-rw-r--r--  1 jmagar jmagar  350 Sep  3 21:46 __init__.py
+drwxr-xr-x  2 jmagar jmagar 4096 Sep  3 22:06 __pycache__
+-rw-r--r--  1 jmagar jmagar  818 Sep  3 21:46 error.py
+-rw-r--r--  1 jmagar jmagar  796 Sep  3 21:46 logging.py
+-rw-r--r--  1 jmagar jmagar 2748 Sep  3 21:46 progress.py
+from __future__ import annotations
+
+import time
+from dataclasses import dataclass, field
+from typing import Any, Awaitable, Callable
+
+from fastapi import Request, Response
+
+
+@dataclass
+class ProgressTracker:
+    operation_id: str
+[2025-09-04T02:24:50] tokens used: 1725
+
+[2025-09-04T02:24:52] thinking
+
+**Looking into sources**
+
+I need to check the models for crawling and the sources I can use. It’s essential to ensure the models are accurately providing the data I need. I wonder if I should focus on specific sources or if I can draw from a broader range. I guess my next step will be exploring which sources are most reliable and accessible for what I need to achieve. Let’s investigate this further!
+[2025-09-04T02:24:54] exec bash -lc "sed -n '1,200p' crawler_mcp/models/crawl.py && printf \"\\n-- sources --\\n\" && sed -n '1,260p' crawler_mcp/models/sources.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:24:54] bash -lc "sed -n '1,200p' crawler_mcp/models/crawl.py && printf \"\\n-- sources --\\n\" && sed -n '1,260p' crawler_mcp/models/sources.py" succeeded in 34ms:
+"""
+Data models for web crawling operations.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from enum import Enum
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+
+# Reusable validator function
+def calculate_word_count_validator(v: int, info: Any) -> int:
+    """Pydantic validator to calculate word count from content."""
+    if v == 0 and info.data and "content" in info.data:
+        content = info.data["content"]
+        if content:
+            return len(content.split())
+[2025-09-04T02:24:54] tokens used: 1069
+[2025-09-04T02:25:00] exec bash -lc 'rg -n "repository|git|directory crawl|crawl directory|repo" crawler_mcp/crawlers/optimized -S' in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:25:00] bash -lc 'rg -n "repository|git|directory crawl|crawl directory|repo" crawler_mcp/crawlers/optimized -S' succeeded in 36ms:
+crawler_mcp/crawlers/optimized/server.py:44:    from .tools.github_pr_tools import register_github_pr_tools
+crawler_mcp/crawlers/optimized/server.py:48:    from crawler_mcp.crawlers.optimized.tools.github_pr_tools import register_github_pr_tools  # type: ignore
+crawler_mcp/crawlers/optimized/server.py:100:register_github_pr_tools(mcp)
+crawler_mcp/crawlers/optimized/README.md:30:│   └── pr.py                  # GitHub PR operations CLI
+crawler_mcp/crawlers/optimized/README.md:57:    └── reporting.py           # Enhanced reporting system
+crawler_mcp/crawlers/optimized/README.md:116:- `output/crawls/{domain}/latest/report.json` - Performance report
+crawler_mcp/crawlers/optimized/README.md:132:│   │   │   └── report.json    # Performance metrics
+crawler_mcp/crawlers/optimized/README.md:136:├── pr/                        # GitHub PR operations
+crawler_mcp/crawlers/optimized/README.md:137:│   ├── {owner}_{repo}_{pr}/   # Per-PR organization
+crawler_mcp/crawlers/optimized/README.md:280:- **Verification System**: Post-upload verification with detailed reporting
+crawler_mcp/crawlers/optimized/README.md:311:- Comprehensive verification system with detailed mismatch reporting
+crawler_mcp/crawlers/optimized/README.md:319:- Comprehensive final reports with performance analytics
+crawler_mcp/crawlers/optimized/README.md:371:- Configuration validation and error reporting
+crawler_mcp/crawlers/optimized/README.md:486:For questions, feature requests, or contributions, please refer to the project documentation or open an issue in the repository.
+crawler_mcp/crawlers/optimized/processing/url_discovery.py:972:                1 for part in parsed.path.split("/") if part.isdigit()
+crawler_mcp/crawlers/optimized/utils/output_manager.py:89:            Dictionary with output paths: html, ndjson, report
+crawler_mcp/crawlers/optimized/utils/output_manager.py:98:            "report": latest_dir / "report.json",
+crawler_mcp/crawlers/optimized/utils/output_manager.py:102:        self, owner: str, repo: str, pr_number: int
+crawler_mcp/crawlers/optimized/utils/output_manager.py:107:            owner: GitHub repository owner
+crawler_mcp/crawlers/optimized/utils/output_manager.py:108:            repo: GitHub repository name
+[2025-09-04T02:25:00] tokens used: 3631
+
+[2025-09-04T02:25:08] thinking
+
+**Planning crawling tools**
+
+I'm focusing on implementing a special fast-path for GitHub PR crawling by synthesizing content with the GitHub API. My task is clear: I need to plan for the MCP tools "scrape" and "crawl." These will be optimized in a specific location and registered accordingly. For "scrape," it should only accept a single page URL with optional features like snapshots and HTML inclusion. I think I should consider using BrowserFactory and ContentExtractorFactory for fetching and extracting content effectively.
+**Defining response structure**
+
+I’m considering how to provide a typed response, possibly through a Pydantic model or a typed dict structure with fields like title, lang, word_count, content_excerpt, and disk paths for HTML and NDJSON reports. I'm also thinking about implementing a mechanism for capturing screenshots. Although the BrowserFactory has a text_mode that disables images, I may need to explore using crawl4ai to obtain snapshots. Toggling text_mode might help with using Playwright for screenshots, but I'm not sure yet. Let's investigate further!
+[2025-09-04T02:25:13] codex
+**Defining response structure**
+
+I’m considering how to provide a typed response, possibly through a Pydantic model or a typed dict structure with fields like title, lang, word_count, content_excerpt, and disk paths for HTML and NDJSON reports. I'm also thinking about implementing a mechanism for capturing screenshots. Although the BrowserFactory has a text_mode that disables images, I may need to explore using crawl4ai to obtain snapshots. Toggling text_mode might help with using Playwright for screenshots, but I'm not sure yet. Let's investigate further!
+[2025-09-04T02:25:14] exec bash -lc 'rg -n "screenshot|snapshot" crawler_mcp/crawlers/optimized -S' in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:25:14] bash -lc 'rg -n "screenshot|snapshot" crawler_mcp/crawlers/optimized -S' succeeded in 40ms:
+crawler_mcp/crawlers/optimized/utils/monitoring.py:465:            # System snapshot for alerts & context
+crawler_mcp/crawlers/optimized/AGENTS.md:34:- PRs include: summary, rationale, linked issues, test coverage notes, screenshots/logs when relevant.
+[2025-09-04T02:25:14] tokens used: 8439
+
+[2025-09-04T02:25:18] thinking
+
+**Planning for screenshots support**
+
+It looks like we don't directly support screenshots right now. I’m thinking we could add a lightweight screenshot option via AsyncWebCrawler when the browser is in JS mode, utilizing Playwright's page.screenshot feature. If not supported, we could skip that part. For now, we can propose capturing raw HTML and HTTP headers as 'snapshots.' If the configuration allows JavaScript, we might consider adding a helper within BrowserFactory for future screenshot support. But for now, let’s keep it optional.
+**Implementing crawling features**
+
+For the crawl functionality, I see the need to detect input types like HTTP(s) for websites, paths for directories, and Git URLs for repositories. Unfortunately, the existing code doesn't seem to have utilities for crawling directories or repositories. I think we could implement a straightforward method that enumerates files, extracts text, and stores stats as an NDJSON manifest. For GitHub PRs, we could utilize functions from the GitHub PR tool. I also note that if rag_ingest is enabled, we should engage RagService for ingestion or use VectorService for embedding.
+**Optimizing ingestion features**
+
+The optimized core employs TEI embeddings and Qdrant within the OptimizedConfig, but for non-website inputs like directories or repositories, we can call RagService.ingest with a list of documents. I need to check the core RagService in the crawler_mcp/core, but the requirement specifies that RAG ingestion should remain optional and decoupled. I’ll include a flag to control this feature, and if enabled, we'll use either RagService or VectorService as needed.
+[2025-09-04T02:25:26] codex
+**Implementing crawling features**
+
+For the crawl functionality, I see the need to detect input types like HTTP(s) for websites, paths for directories, and Git URLs for repositories. Unfortunately, the existing code doesn't seem to have utilities for crawling directories or repositories. I think we could implement a straightforward method that enumerates files, extracts text, and stores stats as an NDJSON manifest. For GitHub PRs, we could utilize functions from the GitHub PR tool. I also note that if rag_ingest is enabled, we should engage RagService for ingestion or use VectorService for embedding.
+[2025-09-04T02:25:26] codex
+**Optimizing ingestion features**
+
+The optimized core employs TEI embeddings and Qdrant within the OptimizedConfig, but for non-website inputs like directories or repositories, we can call RagService.ingest with a list of documents. I need to check the core RagService in the crawler_mcp/core, but the requirement specifies that RAG ingestion should remain optional and decoupled. I’ll include a flag to control this feature, and if enabled, we'll use either RagService or VectorService as needed.
+[2025-09-04T02:25:26] exec bash -lc "rg -n \"class RagService|def ingest|RagService\\(\" crawler_mcp -S" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:25:26] bash -lc "rg -n \"class RagService|def ingest|RagService\\(\" crawler_mcp -S" succeeded in 46ms:
+crawler_mcp/tools/crawling.py:101:            async with RagService() as rag_service:
+crawler_mcp/crawlers/optimized/tools/rag.py:55:            async with RagService() as rag_service:
+crawler_mcp/crawlers/optimized/server.py:163:            async with RagService() as rag_service:
+crawler_mcp/core/rag/__init__.py:83:    return RagService()
+crawler_mcp/core/rag/service.py:218:class RagService:
+[2025-09-04T02:25:26] tokens used: 737
+[2025-09-04T02:25:28] exec bash -lc "sed -n '1,320p' crawler_mcp/core/rag/service.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:25:28] bash -lc "sed -n '1,320p' crawler_mcp/core/rag/service.py" succeeded in 26ms:
+"""
+Service orchestration and query processing for RAG operations.
+
+This module provides the main RagService class that coordinates all RAG operations
+including query processing, caching, reranking, and service lifecycle management.
+"""
+
+import asyncio
+import hashlib
+import logging
+import math
+import re
+import time
+from collections.abc import Callable
+from datetime import datetime, timedelta
+from threading import RLock
+from typing import Any
+
+from fastmcp.exceptions import ToolError
+
+[2025-09-04T02:25:28] tokens used: 295
+
+[2025-09-04T02:25:40] thinking
+
+**Searching for ingest method**
+
+I’m thinking that RagService likely has an ingest method, so I should search for it. It’s probably the key to understanding how data is brought into the service. This could help me figure out how to work with it effectively. I'll need to dig into the documentation or codebase to find the specifics about how this ingest function operates. It’s always exciting to uncover new methods!
+[2025-09-04T02:25:41] exec bash -lc "rg -n \"def ingest|def ingest_documents|ingest\\(\" crawler_mcp/core/rag -S" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:25:41] bash -lc "rg -n \"def ingest|def ingest_documents|ingest\\(\" crawler_mcp/core/rag -S" exited 1 in 43ms:
+
+[2025-09-04T02:25:41] tokens used: 61658
+[2025-09-04T02:25:44] exec bash -lc 'rg -n "ingest|upsert|add_documents" crawler_mcp/core -S' in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:25:44] bash -lc 'rg -n "ingest|upsert|add_documents" crawler_mcp/core -S' succeeded in 46ms:
+crawler_mcp/core/rag/processing.py:355:        4. Only upserts new or modified chunks
+crawler_mcp/core/rag/processing.py:660:                stored_count = await self.vector_service.upsert_documents(
+crawler_mcp/core/rag/processing.py:765:                    stored = await self.vector_service.upsert_documents(batch)
+crawler_mcp/core/rag/embedding.py:576:                            await self.vector_service.upsert_documents(valid_chunks)
+crawler_mcp/core/vectors/__init__.py:68:    async def upsert_documents(
+crawler_mcp/core/vectors/__init__.py:71:        """Upsert document chunks into the vector database."""
+crawler_mcp/core/vectors/__init__.py:72:        return await self.operations.upsert_documents(documents, batch_size)
+crawler_mcp/core/vectors/operations.py:37:    async def upsert_documents(
+crawler_mcp/core/vectors/operations.py:41:        Upsert document chunks into the vector database.
+crawler_mcp/core/vectors/operations.py:44:            documents: List of document chunks to upsert
+crawler_mcp/core/vectors/operations.py:48:            Number of documents successfully upserted
+crawler_mcp/core/vectors/operations.py:60:        total_upserted = 0
+crawler_mcp/core/vectors/operations.py:62:        logger.info(f"Upserting {len(documents)} documents in {total_batches} batches")
+crawler_mcp/core/vectors/operations.py:70:                f"Upserting batch {batch_idx + 1}/{total_batches} ({len(batch)} documents)"
+crawler_mcp/core/vectors/operations.py:110:                    # Upsert the batch with client recreation on error
+crawler_mcp/core/vectors/operations.py:113:                        result = await client.upsert(
+crawler_mcp/core/vectors/operations.py:119:                            result = await client.upsert(
+crawler_mcp/core/vectors/operations.py:126:                        total_upserted += len(points)
+crawler_mcp/core/vectors/operations.py:127:                        logger.debug(f"Successfully upserted batch {batch_idx + 1}")
+crawler_mcp/core/vectors/operations.py:130:                            f"Failed to upsert batch {batch_idx + 1}: {result.status}"
+[2025-09-04T02:25:44] tokens used: 2732
+[2025-09-04T02:25:46] exec bash -lc "sed -n '300,880p' crawler_mcp/core/rag/processing.py" in /home/jmagar/code/crawl-mcp
+[2025-09-04T02:25:46] bash -lc "sed -n '300,880p' crawler_mcp/core/rag/processing.py" succeeded in 41ms:
+        }
+
+
+class ProcessingPipeline:
+    """Main RAG processing pipeline coordinator."""
+
+    def __init__(self) -> None:
+        self.chunker = AdaptiveChunker(
+            chunk_size=settings.chunk_size,
+            overlap=settings.chunk_overlap,
+        )
+        self.embedding_pipeline = EmbeddingPipeline()
+        self.deduplication_manager = (
+            VectorDeduplicationManager()
+        )  # Uses default 0.95 threshold
+        self.vector_service: VectorService | None = None
+        self._initialized = False
+
+    async def initialize(self) -> None:
+        """Initialize the processing pipeline."""
+[2025-09-04T02:25:46] tokens used: 701
+
+[2025-09-04T02:25:59] thinking
+
+**Planning repository scanning**
+
+I'm thinking about how to scan repositories effectively. For local paths with a .git present or git URLs, I might consider cloning, but that’s not ideal within the MCP. Specific formats like github.com/owner/repo or using GitHub APIs to enumerate the file tree could work, but it may be heavy. The requirement emphasizes auto-detecting input types and crawling various sources. I’ll focus on local directories and recognizing remote GitHub repos while considering unified scanning.
+**Extending GitHubClient for output**
+
+I'm noticing that our GitHubClient doesn't currently implement the endpoint we need, but I think we can extend it! The plan should involve designing a minimal method to retrieve the repository tree. Alternatively, using the 'contents' API with recursion could be an option. I also want to reference OutputManager's 'save_crawl_outputs' method to write combined HTML and ndjson files. We could save a manifest ndjson and a summary JSON too while ensuring we follow the existing output conventions and logging.
+**Planning code adaptation**
+
+I’m considering how to adapt the code effectively, but it’s not time to add that just yet. The plan should involve using OutputManager.get_crawl_output_paths to retrieve html/ndjson/report, even if the html for repositories and directories might be None. Saving the ndjson as a manifest sounds acceptable.
+
+For progress tracking, I’ll utilize progress_middleware to create a tracker and call ctx.report_progress with increasing phases. I also need to outline parameters for the scraping process, like URL, options for HTML and Markdown inclusion, and other relevant settings.
+**Defining response schema for scraping**
+
+I'm thinking we should set "stream" to False since it’s not needed here.
+
+For the response schema in the scraping process, I want to define the kind as 'webpage' and include the URL, title, language (if available), word count, content excerpt, and possibly headers.
+
+I’ll specify paths for html, ndjson, and report relative to the output directory and gather stats like crawl time, content length, and link count.
+
+For the crawl input, I’ll unify it to string input for simplicity, setting max_urls to default at 1000 while keeping other important options in mind.
+**Planning the crawling structure and features**
+
+I'm determining how to set up the crawling process based on user choices. For including options, I want to default "include_html" to False and "include_markdown" to True. I'm also outlining how to detect various input formats for GitHub PRs and repository URLs.
+
+The plan involves using different strategies for websites, directories, and repositories, ensuring we track progress across all phases. For GitHub PRs, I’ll reuse existing optimized tools to manage crawling effectively.
+
+Finally, I’ll define result schemas and ensure parameters are validated, while providing clear error handling and logging outputs. This structure aims for a comprehensive yet efficient crawling method.
+**Planning the Crawling Tool Registration and Structure**
+
+I’m setting up the function `register_crawling_tools(mcp: FastMCP) -> None` to define two tools:
+
+- `scrape(ctx, url, ..., rag_ingest: bool=False)`
+- `crawl(ctx, input, ..., rag_ingest: bool=False, pr_mode: Literal["synthesize","items"]="synthesize"`
+
+These functions will utilize `progress_middleware`.
+
+For server integration, I need to import `register_crawling_tools` in `optimized/server.py` and develop a detailed test plan that includes unit tests for input detection, parameter validation, and progress tracking.
+
+I’ll ensure a cutover checklist is in place, updating documentation and making sure the CLI and AGENTS.md are not affected. The final structure will feature well-defined headers and bullet points, with a focus on clarity in signatures, parameter lists, validation rules, result schemas, and error handling.
+[2025-09-04T02:26:41] codex
+**Extending GitHubClient for output**
+
+I'm noticing that our GitHubClient doesn't currently implement the endpoint we need, but I think we can extend it! The plan should involve designing a minimal method to retrieve the repository tree. Alternatively, using the 'contents' API with recursion could be an option. I also want to reference OutputManager's 'save_crawl_outputs' method to write combined HTML and ndjson files. We could save a manifest ndjson and a summary JSON too while ensuring we follow the existing output conventions and logging.
+[2025-09-04T02:26:41] codex
+**Planning code adaptation**
+
+I’m considering how to adapt the code effectively, but it’s not time to add that just yet. The plan should involve using OutputManager.get_crawl_output_paths to retrieve html/ndjson/report, even if the html for repositories and directories might be None. Saving the ndjson as a manifest sounds acceptable.
+
+For progress tracking, I’ll utilize progress_middleware to create a tracker and call ctx.report_progress with increasing phases. I also need to outline parameters for the scraping process, like URL, options for HTML and Markdown inclusion, and other relevant settings.
+[2025-09-04T02:26:41] codex
+**Defining response schema for scraping**
+
+I'm thinking we should set "stream" to False since it’s not needed here.
+
+For the response schema in the scraping process, I want to define the kind as 'webpage' and include the URL, title, language (if available), word count, content excerpt, and possibly headers.
+
+I’ll specify paths for html, ndjson, and report relative to the output directory and gather stats like crawl time, content length, and link count.
+
+For the crawl input, I’ll unify it to string input for simplicity, setting max_urls to default at 1000 while keeping other important options in mind.
+[2025-09-04T02:26:41] codex
+**Planning the crawling structure and features**
+
+I'm determining how to set up the crawling process based on user choices. For including options, I want to default "include_html" to False and "include_markdown" to True. I'm also outlining how to detect various input formats for GitHub PRs and repository URLs.
+
+The plan involves using different strategies for websites, directories, and repositories, ensuring we track progress across all phases. For GitHub PRs, I’ll reuse existing optimized tools to manage crawling effectively.
+
+Finally, I’ll define result schemas and ensure parameters are validated, while providing clear error handling and logging outputs. This structure aims for a comprehensive yet efficient crawling method.
+[2025-09-04T02:26:41] codex
+**Planning the Crawling Tool Registration and Structure**
+
+I’m setting up the function `register_crawling_tools(mcp: FastMCP) -> None` to define two tools:
+
+- `scrape(ctx, url, ..., rag_ingest: bool=False)`
+- `crawl(ctx, input, ..., rag_ingest: bool=False, pr_mode: Literal["synthesize","items"]="synthesize"`
+
+These functions will utilize `progress_middleware`.
+
+For server integration, I need to import `register_crawling_tools` in `optimized/server.py` and develop a detailed test plan that includes unit tests for input detection, parameter validation, and progress tracking.
+
+I’ll ensure a cutover checklist is in place, updating documentation and making sure the CLI and AGENTS.md are not affected. The final structure will feature well-defined headers and bullet points, with a focus on clarity in signatures, parameter lists, validation rules, result schemas, and error handling.
+[2025-09-04T02:26:41] codex
+
+Here’s a concrete, implementation-ready plan for the two optimized crawling MCP tools, with tight integration to existing optimized components and clear deliverables.
+
+**Overview**
+- One module under `crawler_mcp/crawlers/optimized/tools/` that registers both tools via `register_crawling_tools(mcp: FastMCP) -> None`.
+- Two tools:
+  - `scrape`: single-page extraction with compact return + disk outputs.
+  - `crawl`: unified smart crawling: auto-detect URL | directory | repository | GitHub PR.
+- Use only optimized stack (strategy, clients, utils, middleware).
+- Progress via `progress_middleware` + `ctx.report_progress`.
+- Responses compact and typed; full manifests saved via `OutputManager`.
+- Optional `rag_ingest: bool = False` for decoupled RAG indexing.
+
+**File Layout**
+- `crawler_mcp/crawlers/optimized/tools/crawling.py`
+  - `register_crawling_tools(mcp: FastMCP) -> None`
+  - `@mcp.tool async def scrape(...) -> ScrapeResult`
+  - `@mcp.tool async def crawl(...) -> CrawlUnifiedResult`
+  - Internal helpers:
+    - `_detect_input_kind(inp: str) -> Literal["website","directory","repository","github_pr"]`
+    - `_build_config_overrides(...) -> OptimizedConfig`
+    - `_save_pages_and_report(output_mgr, domain, html, pages, report) -> dict[str, str]`
+    - `_repo_scan_local(path: str, globs: list[str], max_bytes: int) -> list[PageContent]`
+    - `_repo_scan_github(owner, repo, ref, globs, max_files) -> list[PageContent]` (planned extension)
+    - `_dir_scan(path: str, globs: list[str], max_bytes: int) -> list[PageContent]`
+    - `_rag_ingest_pages(pages: list[PageContent], seed_url: str | None, crawl_session_id: str) -> dict[str, int]`
+
+- Wire-up:
+  - `crawler_mcp/crawlers/optimized/server.py`: import and call `register_crawling_tools(mcp)` alongside PR and RAG registrations.
+
+**API Signatures**
+
+- `register_crawling_tools(mcp: FastMCP) -> None`
+  - Registers `scrape` and `crawl`.
+  - Ensures all progress trackers created/removed and ToolErrors surfaced cleanly.
+
+- `scrape(ctx: Context, url: str, *, javascript: bool | None = None, include_html: bool = False, include_markdown: bool = True, snapshots: bool = False, timeout_ms: int | None = None, content_validation: bool | None = None, min_word_count: int | None = None, output_dir: str | None = None, return_preview_chars: int = 400, rag_ingest: bool = False) -> ScrapeResult`
+  - Single-page fetch via optimized strategy (max_urls=1).
+  - Optional snapshots: save raw HTML and response headers; screenshots only if supported by browser stack (best-effort; if unavailable, skip silently).
+  - Returns compact, typed result with key signals + disk paths.
+
+- `crawl(ctx: Context, input: str, *, max_urls: int = 1000, concurrency: int | None = None, javascript: bool | None = None, no_cache: bool = False, content_validation: bool | None = None, include_html: bool = False, include_markdown: bool = True, allowed_locales: list[str] | None = None, repo_ref: str | None = None, dir_globs: list[str] | None = None, max_file_bytes: int = 500_000, pr_mode: Literal["synthesize","items"] = "synthesize", output_dir: str | None = None, return_preview_items: int = 3, rag_ingest: bool = False) -> CrawlUnifiedResult`
+  - Auto-detects kind: website | directory | repository | github_pr.
+  - For `github_pr`, `pr_mode="synthesize"` uses optimized PR fast-path; `"items"` leverages `github_pr_tools` list function.
+  - Returns unified typed schema with kind + stats + preview + paths.
+
+**Parameter Rules**
+- Common clamps:
+  - `max_urls`: clamp 1..2000 (default 1000).
+  - `concurrency`: clamp 1..64 (default from `OptimizedConfig.max_concurrent_crawls`).
+  - `timeout_ms`: clamp 1000..120000 (default from `OptimizedConfig.page_timeout`).
+  - `min_word_count`: clamp 0..500.
+  - `max_file_bytes`: clamp 10_000..2_000_000.
+  - `return_preview_chars`: clamp 80..1000; `return_preview_items`: clamp 1..10.
+- Validation:
+  - `url` must start with `http://` or `https://` (scrape).
+  - `input` must match one of:
+    - `^https?://` → website (website or PR, see PR patterns below)
+    - existing local path: `os.path.isdir` → directory
+    - local git repo: `os.path.isdir(path/.git)` → repository
+    - GitHub repo URL: `https://github.com/{owner}/{repo}` or `git@github.com:{owner}/{repo}` → repository (remote)
+    - PR formats:
+      - `https://github.com/{owner}/{repo}/pull/{num}` or `/pull/{num}/...`
+      - `{owner}/{repo}#123`
+      - `gh:{owner}/{repo}#123`
+- ToolError messages:
+  - Start with concise reason and hint, e.g., “Invalid input: repo URL requires owner/repo; try https://github.com/owner/repo”.
+
+**Result Schemas**
+
+- `ScrapeResult` (Pydantic planned)
+  - `kind: Literal["webpage"]`
+  - `url: str`
+  - `title: str | None`
+  - `language: str | None`
+  - `word_count: int`
+  - `content_excerpt: str` (first N chars of markdown/text; whitespace collapsed)
+  - `paths: dict[str, str]` (keys: `html?`, `ndjson`, `report`)
+  - `stats: dict[str, Any]` (e.g., `crawl_time_ms`, `content_bytes`, `links`, `images`)
+  - `rag: dict[str, int] | None` (if `rag_ingest=True`, include `{"documents_processed", "chunks_created", "embeddings_generated", "chunks_stored"}`)
+  - `timestamp: str`
+
+- `CrawlUnifiedResult` (Pydantic planned)
+  - `kind: Literal["website","directory","repository","github_pr"]`
+  - `input: str`
+  - `stats: dict[str, Any]` (per-kind)
+    - website: `pages_crawled`, `pages_failed`, `duration_s`, `pps`, `discovered`
+    - directory/repository: `files_scanned`, `files_processed`, `bytes_read`, `duration_s`
+    - github_pr (synthesize): `pages_crawled`, `duration_s`; (items): `counts` per item_type
+  - `preview: list[dict[str, Any]]` (≤ return_preview_items)
+    - website: `{url,title,word_count}`
+    - dir/repo: `{path,lines,bytes}`
+    - github_pr synth: `{title,url,word_count}`; items: `{item_type,author,path?,excerpt}`
+  - `paths: dict[str, str]` (keys subset of `html?`, `ndjson`, `report`; PR items use `output/pr/{repo-pr}/items.ndjson` etc.)
+  - `rag: dict[str, int] | None`
+  - `timestamp: str`
+
+**Progress Phases**
+- Tracking: `progress_middleware.create_tracker(operation_id)` and `ctx.report_progress(progress=i,total=N)` with descriptive statuses via `ctx.info(...)`.
+- `scrape` (total=6):
+  - 1 Init managers + config
+  - 2 Fetch page
+  - 3 Extract + validate
+  - 4 Save outputs
+  - 5 Optional RAG ingest
+  - 6 Finalize + summarize
+- `crawl` (total=7):
+  - 1 Detect input kind
+  - 2 Init managers + config
+  - 3 Discover/scan/fetch
+  - 4 Process + convert
+  - 5 Save outputs
+  - 6 Optional RAG ingest
+  - 7 Finalize + summarize
+- Always `remove_tracker()` in `finally`.
+
+**Import Map (Optimized Core Only)**
+- `from ..config import OptimizedConfig`
+- `from ..core.strategy import OptimizedCrawlerStrategy`
+- `from ..utils.output_manager import OutputManager`
+- `from ..utils.log_manager import LogManager`
+- `from ..middleware.progress import progress_middleware`
+- `from ....models.crawl import PageContent` (for directory/repo representations)
+- GitHub (PR/repo):
+  - `from ..clients.github_client import GitHubClient` (for PR synth fast-path already used by strategy; for repo tree in planned extension)
+  - Optionally reuse `from .github_pr_tools import list_pr_items_impl` for `pr_mode="items"` to avoid duplicating logic.
+
+**Control Flow per Tool**
+
+- `scrape`:
+  - Build `OptimizedConfig.from_env()`; apply flags: `javascript`, `content_validation`, `min_word_count`, `timeout_ms`, `output_dir`.
+  - Instantiate managers: `OutputManager(output_dir)`, `LogManager(output_dir+"/logs")`.
+  - `await strat.start()`; `resp = await strat.crawl(url, max_urls=1, stream=False)`.
+  - Collect pages: `strat.get_last_pages()`; compute excerpt; language if provided in metadata.
+  - Save: `output_mgr.save_crawl_outputs(domain, resp.html if include_html else None, pages, report)`, and `output_mgr.update_index(...)`.
+  - Optional RAG: build `CrawlResult`-like struct or directly `RagService().processing_pipeline.process_crawl_result` from `PageContent[]` with proper metadata; include stats in `rag` field.
+  - Return compact `ScrapeResult`.
+
+- `crawl`:
+  - Detect kind with `_detect_input_kind`.
+  - website: same as `scrape` but with discovery, respecting `max_urls`, `concurrency`, `allowed_locales`, `no_cache`, etc. Reuse config knobs from CLI semantics (`crawler_mcp/crawlers/optimized/cli/crawl.py`).
+  - directory: scan files by `dir_globs` (default patterns: `["**/*.md","**/*.txt","**/*.rst","**/*.py","**/*.js","**/*.ts","**/*.json","**/*.yml","**/*.yaml"]`), skip > `max_file_bytes`, ignore hidden and `node_modules`, create `PageContent` with `url="file://..."`, `content` from text, title from filename; Save NDJSON as manifest (`pages.ndjson`), with `report.json` summarizing stats.
+  - repository:
+    - local `.git`: treat as directory with repo-aware ignores (`.git`, `target`, `dist`, `build`).
+    - remote GitHub: planned small extension to `GitHubClient`:
+      - `list_repo_tree(owner, repo, ref="HEAD", recursive=True) -> list[str]`
+      - `get_file_content(owner, repo, path, ref)` already exists (returns mode, content); use it to fetch text; filter same globs; create `PageContent` entries; Save as above.
+  - github_pr:
+    - `pr_mode="synthesize"`: pass PR URL to `OptimizedCrawlerStrategy.crawl` (existing fast-path sets headers + PR pages). Save and return website-like result with `kind="github_pr"`.
+    - `pr_mode="items"`: reuse `list_pr_items_impl()` to get normalized items; save `items.ndjson` under `output/pr/{repo}-{pr}/`; return compact counts/preview and paths; optional `rag_ingest` can map each item to a `PageContent` with `content=item["body"]` and synthetic URL to `canonical_url` for vectorization.
+
+**Error Handling**
+- Validate inputs early; raise `ToolError` with clear human messages.
+- Wrap main blocks in try/except; report progress phase on failure; include `ctx.info("…failed: reason")`.
+- For partial success, save partial NDJSON and `report.json` when possible; still return compact result with a `stats["partial"]=True` flag.
+
+**Logging**
+- Use `LogManager` to set up `crawl_logger`, `error_logger`, `console_logger` (mirroring CLI patterns).
+- Respect existing logging levels; don’t reconfigure global handlers in tools; log tool-specific info to per-op logger instance.
+
+**Saving Outputs**
+- Use `OutputManager` for:
+  - websites/PR synth: `save_crawl_outputs(domain, html, page_data, report)`, `update_index(domain, metadata)`.
+  - directory/repo: reuse `get_crawl_output_paths()` and write `pages.ndjson` and `report.json`; set `html=None`. Keep directory naming via `sanitize_domain()` on a synthetic domain name (e.g., `file__home_user_repo` or `github_com_owner_repo`).
+
+**RAG Ingestion (Optional)**
+- If `rag_ingest`:
+  - Build minimal `CrawlResult`-shaped object with `pages: list[PageContent]`, and call `RagService().processing_pipeline.process_crawl_result(crawl_result, seed_url=seed_url, crawl_session_id=uuid)`.
+  - Report progress sub-steps: dedup check, chunking, embeddings, upsert.
+  - Attach returned stats to response `rag` field.
+
+**Tests**
+
+- Unit (markers: `unit`):
+  - `_detect_input_kind`: URLs, PR syntaxes, local dirs, local git repos, git-like URLs. Edge cases and misclassifications.
+  - Parameter clamps: ensure values are clamped and ToolErrors raised for invalid inputs.
+  - Preview builder: excerpt rules, max lengths.
+  - Paths: OutputManager path keys exist and are correct.
+
+- Integration (markers: `integration`, avoid `requires_services` unless env available):
+  - `scrape` against a local simple HTTP page (or mock AsyncWebCrawler if network restricted).
+  - `crawl` website: with `max_urls=1` to keep fast and deterministic, asserting compact schema and saved files present.
+  - `crawl` directory: create temp tree, ensure file scanning, manifest counts, size clamps.
+  - `crawl` github_pr synth: with a known PR URL in offline mode, skip if no `GITHUB_TOKEN` (mark requires_services); otherwise assert compact results and saved outputs.
+  - `rag_ingest`: isolate behind `requires_services`; assert that `rag` stats are present when vector services configured.
+
+- Contract tests (lightweight):
+  - `scrape`/`crawl` return type schemas (validate keys and types).
+  - Progress reporting: verify at least 3+ calls to `ctx.report_progress` in happy-path.
+
+**Cutover Checklist**
+- Add `register_crawling_tools(mcp)` import + call in `crawler_mcp/crawlers/optimized/server.py` below existing registrations.
+- No references to legacy `crawler_mcp/tools/crawling.py` or `core/orchestrator.py`.
+- Keep CLI intact; these are MCP tools only.
+- Verify `ruff`, `mypy`, and unit tests pass.
+- Update `crawler_mcp/crawlers/optimized/AGENTS.md` short blurb on new tools and parameters.
+- Optional: add `examples/` snippets showing unified `crawl` across input kinds.
+- Ensure `OutputManager` usage consistent; for repo/dir manifests, maintain `pages.ndjson` naming for parity.
+
+**Exact Classes/Functions Used**
+- `OptimizedConfig.from_env`, `OptimizedConfig` attribute overrides.
+- `OptimizedCrawlerStrategy.start/crawl/close`, `get_last_pages()`, `get_performance_report()`, `get_pr_report()` for PR synth.
+- `OutputManager.sanitize_domain/get_crawl_output_paths/save_crawl_outputs/update_index`.
+- `LogManager.setup_*_logger` for crawl/error/console.
+- `progress_middleware.create_tracker/remove_tracker`.
+- `GitHubClient` (existing methods), plus planned extension for repo trees.
+- `github_pr_tools.list_pr_items_impl` for PR items mode (reuse, no duplication).
+- `PageContent` from `crawler_mcp/models/crawl.py` to model directory/repo items.
+- `RagService().processing_pipeline.process_crawl_result` when `rag_ingest=True` (optional).
+
+This plan keeps implementation scoped and surgical, leverages the optimized strategy for websites/PRs, provides a clean directory/repo path without legacy orchestrators, reports progress clearly, and returns compact, typed results while writing full artifacts to disk.
+[2025-09-04T02:27:35] tokens used: 11522

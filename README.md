@@ -73,7 +73,7 @@ pip install -e .[ml]
 ### 4. Run the Server
 ```bash
 # Development mode with hot reload
-fastmcp dev crawler_mcp/server.py
+fastmcp dev crawler_mcp/crawlers/optimized/server.py
 
 # Or run directly
 uv run python -m crawler_mcp.server
@@ -335,16 +335,16 @@ crawler-mcp/
 ### Development Commands
 ```bash
 # Start development server with hot reload
-fastmcp dev crawler_mcp/server.py
+fastmcp dev crawler_mcp/crawlers/optimized/server.py
 
 # Run tests
 uv run pytest
 
 # Install for Claude Desktop
-fastmcp install claude-desktop crawler_mcp/server.py
+fastmcp install claude-desktop crawler_mcp/crawlers/optimized/server.py
 
 # Install for Claude Code
-fastmcp install claude-code crawler_mcp/server.py
+fastmcp install claude-code crawler_mcp/crawlers/optimized/server.py
 ```
 
 ## 🐳 Docker Deployment
@@ -405,7 +405,7 @@ The included `docker-compose.yml` provides production-ready services:
 ### Claude Code CLI
 ```bash
 # Install and configure
-fastmcp install claude-code crawler_mcp/server.py
+fastmcp install claude-code crawler_mcp/crawlers/optimized/server.py
 ```
 
 ## 📄 License

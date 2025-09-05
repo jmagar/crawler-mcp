@@ -82,7 +82,6 @@ services:
       - "${WEBHOOK_PORT:-38080}:38080"   # Webhook server
     volumes:
       - ./data/scripts:/app/scripts
-      - ./data/webhook_outputs:/app/webhook_outputs
       - ./data/logs:/app/logs
       - ./data/data:/app/data
     env_file: .env

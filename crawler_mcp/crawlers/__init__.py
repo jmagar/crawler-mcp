@@ -1,17 +1,6 @@
-"""
-Crawling strategies for different source types.
+"""Deprecated crawlers package.
+
+All crawler code has moved into the top-level `crawler_mcp` package.
 """
 
-from .base import BaseCrawlStrategy
-from .directory import DirectoryCrawlStrategy, DirectoryRequest
-from .repository import RepositoryCrawlStrategy, RepositoryRequest
-from .web import WebCrawlStrategy
-
-__all__ = [
-    "BaseCrawlStrategy",
-    "DirectoryCrawlStrategy",
-    "DirectoryRequest",
-    "RepositoryCrawlStrategy",
-    "RepositoryRequest",
-    "WebCrawlStrategy",
-]
+__all__: list[str] = []

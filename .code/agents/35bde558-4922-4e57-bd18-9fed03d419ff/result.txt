@@ -1,0 +1,99 @@
+[DEBUG] CLI: Delegating hierarchical memory load to server for CWD: /home/jmagar/code/crawl-mcp (memoryImportFormat: tree)
+[DEBUG] [MemoryDiscovery] Loading server hierarchical memory for CWD: /home/jmagar/code/crawl-mcp (importFormat: tree)
+[DEBUG] [MemoryDiscovery] Searching for GEMINI.md starting from CWD: /home/jmagar/code/crawl-mcp
+[DEBUG] [MemoryDiscovery] Determined project root: /home/jmagar/code/crawl-mcp
+[DEBUG] [BfsFileSearch] Scanning [1/200]: batch of 1
+[DEBUG] [BfsFileSearch] Scanning [14/200]: batch of 13
+[DEBUG] [BfsFileSearch] Scanning [29/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [44/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [59/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [74/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [89/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [104/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [119/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [134/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [149/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [164/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [179/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [194/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [200/200]: batch of 6
+[DEBUG] [MemoryDiscovery] Final ordered GEMINI.md paths to read: []
+[DEBUG] [MemoryDiscovery] No GEMINI.md files found in hierarchy of the workspace.
+Flushing log events to Clearcut.
+Data collection is disabled.
+Okay, I will add a JavaScript-enabled retry to the `scrape` tool when the initial attempt yields no content. The retry will be capped at one attempt and configurable via environment variables. I will also add a test case to verify this new behavior.
+
+First, I need to understand the existing implementation. I'll read the key files you've pointed out.# Example of how to integrate with FastMCP
+# if __name__ == "__main__":
+#     mcp = FastMCP()
+#     register_crawling_tools(mcp)
+#
+#     # Example usage:
+#     # mcp.run_tool("scrape", url="https://example.com")
+#     # mcp.run_tool("crawl", target="https://example.com", limit=10)
+#     # mcp.run_tool("crawl", target="/path/to/my/docs", include_patterns=["**/*.md"])
+#     # mcp.run_tool("crawl", target="https://github.com/user/repo.git")
+#     # mcp.run_tool("crawl", target="https://github.com/user/repo/pull/123")
+#
+#     # To run from CLI:
+#     # python -m crawler_mcp.crawlers.optimized.tools.crawling scrape --url "https://..."
+#     # python -m crawler_mcp.crawlers.optimized.tools.crawling crawl --target "https://..."
+#
+#     # To use as a library:
+#     # from crawler_mcp.crawlers.optimized.tools.crawling import scrape, crawl
+#     # await scrape(ctx, url="...")
+#     # await crawl(ctx, target="...")
+#
+#     # To see available tools:
+#     # mcp.list_tools()
+#
+#     # To get help on a tool:
+#     # mcp.help("scrape")
+#
+#     # To run with CLI args:
+#     # mcp.run()
+#
+#     # To use with middleware:
+#     # mcp.add_middleware(my_middleware)
+#
+#     # To use with context:
+#     # ctx = mcp.create_context()
+#     # await mcp.run_tool_with_context(ctx, "scrape", url="...")
+#
+#     # To use with progress reporting:
+#     # async for update in mcp.run_tool_with_progress("scrape", url="..."):
+#     #     print(f"Progress: {update.progress}/{update.total}")
+#
+#     # To use with streaming:
+#     # async for chunk in mcp.run_tool_with_streaming("scrape", url="..."):
+#     #     print(chunk)
+#
+#     # To use with error handling:
+#     # try:
+#     #     await mcp.run_tool("scrape", url="invalid-url")
+#     # except ToolError as e:
+#     #     print(f"Tool error: {e}")
+#
+#     # To use with custom config:
+#     # cfg = OptimizedConfig(max_concurrent_crawls=4)
+#     # strategy = OptimizedCrawlerStrategy(cfg)
+#     # # ... then pass strategy to tool if it accepts it, or set globally
+#
+#     # To use with RAG ingestion:
+#     # mcp.run_tool("scrape", url="...", rag_ingest=True)
+#
+#     # To use with JS enabled:
+#     # mcp.run_tool("scrape", url="...", javascript=True)
+#
+#     # To use with timeout:
+#     # mcp.run_tool("scrape", url="...", timeout_ms=60000)
+#
+#     # To use with custom output dir:
+#     # os.environ["OPTIMIZED_CRAWLER_OUTPUT_DIR"] = "/my/output"
+#     # mcp.run_tool("scrape", url="...")
+#
+#     # To use with custom logging:
+#     # LogManager.setup_logging(level="DEBUG")
+#     # mcp.run_tool("scrape", url="...")
+#
+...

@@ -123,7 +123,7 @@ def create_chunking_strategy(strategy_name: str, **kwargs: Any) -> ChunkingStrat
         available = ", ".join(strategies.keys())
         raise ValueError(f"Unknown strategy '{strategy_name}'. Available: {available}")
 
-    return strategies[strategy_name](**kwargs)
+    return strategies[strategy_name](**kwargs)  # type: ignore[abstract]
 
 
 def get_module_info() -> dict[str, str]:

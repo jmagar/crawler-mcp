@@ -1,0 +1,145 @@
+[DEBUG] CLI: Delegating hierarchical memory load to server for CWD: /home/jmagar/code/crawl-mcp (memoryImportFormat: tree)
+[DEBUG] [MemoryDiscovery] Loading server hierarchical memory for CWD: /home/jmagar/code/crawl-mcp (importFormat: tree)
+[DEBUG] [MemoryDiscovery] Searching for GEMINI.md starting from CWD: /home/jmagar/code/crawl-mcp
+[DEBUG] [MemoryDiscovery] Determined project root: /home/jmagar/code/crawl-mcp
+[DEBUG] [BfsFileSearch] Scanning [1/200]: batch of 1
+[DEBUG] [BfsFileSearch] Scanning [13/200]: batch of 12
+[DEBUG] [BfsFileSearch] Scanning [28/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [43/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [58/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [73/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [88/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [103/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [118/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [133/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [148/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [163/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [178/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [193/200]: batch of 15
+[DEBUG] [BfsFileSearch] Scanning [200/200]: batch of 7
+[DEBUG] [MemoryDiscovery] Final ordered GEMINI.md paths to read: []
+[DEBUG] [MemoryDiscovery] No GEMINI.md files found in hierarchy of the workspace.
+Flushing log events to Clearcut.
+Data collection is disabled.
+Here is a concrete, implementation-ready migration plan to relocate and encapsulate the GitHub webhook server.
+
+### **Phase 1: Scaffolding and Initial Code Migration**
+
+This phase sets up the new structure without modifying or deleting existing code, making it low-risk.
+
+1.  **Create New Webhook Directory**:
+    *   Create the target directory: `crawler_mcp/crawlers/optimized/webhook/`.
+    *   Create an initializer: `touch crawler_mcp/crawlers/optimized/webhook/__init__.py`.
+
+2.  **Move and Rename Server Logic**:
+    *   Copy `crawler_mcp/webhook/server.py` to `crawler_mcp/crawlers/optimized/webhook/server.py`. This preserves the original for reference.
+
+3.  **Create Localized Configuration**:
+    *   The existing webhook likely inherits configuration. To make it self-contained, create a new, dedicated config file: `crawler_mcp/crawlers/optimized/webhook/config.py`.
+    *   Move the `WebhookConfig` class and any related configuration-loading logic from the new `server.py` into this `config.py`.
+
+4.  **Establish Localized Logging**:
+    *   Create a dedicated log directory: `mkdir -p crawler_mcp/crawlers/optimized/logs`.
+    *   In the new `webhook/server.py`, update the logging configuration to write to `crawler_mcp/crawlers/optimized/logs/webhook.log`. This isolates its logs from the old system.
+
+### **Phase 2: Dependency Inversion and Import Rewriting**
+
+This is the core phase where we make the new webhook self-contained by fixing its dependencies. The guiding principle is **no upward imports**.
+
+1.  **Analyze and Refactor Imports**:
+    *   Open `crawler_mcp/crawlers/optimized/webhook/server.py` and systematically review all imports.
+    *   Update all intra-`optimized` imports to use relative paths.
+
+    **Key Import Changes (Anticipated):**
+    | Original Import (in `crawler_mcp/webhook/server.py`) | New Import (in `crawler_mcp/crawlers/optimized/webhook/server.py`) | Rationale |
+    | :--- | :--- | :--- |
+    | `from ..crawlers.optimized.config import...` | `from .config import ...` | Use the new, local config. |
+    | `from ..crawlers.optimized.utils.output_manager import...` | `from ..utils.output_manager import ...` | Correct relative path. |
+    | `from ..crawlers.optimized.clients.tei_client import...` | `from ..clients.tei_client import ...` | Correct relative path. |
+    | `from ..crawlers.optimized.clients.qdrant_http_client import...` | `from ..clients.qdrant_http_client import ...` | Correct relative path. |
+    | `from ..crawlers.optimized.core.batch_utils import...` | `from ..core.batch_utils import ...` | Correct relative path. |
+    | `from crawler_mcp.models import ...` | `from ..models import ...` (or `from .models import ...`) | If any models from the parent `crawler_mcp` are needed, they **must be moved** into `crawler_mcp/crawlers/optimized/models/` or `.../webhook/models.py` to avoid upward imports. |
+
+2.  **Isolate External Dependencies**:
+    *   If the webhook depends on any utility or model from `crawler_mcp/core` or other parent directories, that code must be moved into the `crawler_mcp/crawlers/optimized/` subtree.
+    *   **Decision Rule**: If a dependency is *only* used by the webhook, move it into `.../optimized/webhook/`. If it's shared with other `optimized` components, move it to a shared location like `.../optimized/shared/`.
+
+### **Phase 3: Updating Entry Points and Configurations**
+
+This phase cuts over the system to use the new webhook.
+
+1.  **Update `pyproject.toml`**:
+    *   Change the `crawler-webhook` console script entry point:
+        *   **From**: `crawler-webhook = "crawler_mcp.webhook.server:main"`
+        *   **To**: `crawler-webhook = "crawler_mcp.crawlers.optimized.webhook.server:main"`
+
+2.  **Update `supervisord.conf`**:
+    *   Modify the `command` for the webhook program:
+        *   **From**: `command=python -m crawler_mcp.webhook.server`
+        *   **To**: `command=python -m crawler_mcp.crawlers.optimized.webhook.server`
+
+3.  **Update `crawler_mcp/server.py`**:
+    *   Locate the `subprocess.Popen` or similar call that launches the webhook. Update the module path to point to the new location.
+
+4.  **Update Dockerfile**:
+    *   Search the `Dockerfile` for any explicit references to `crawler_mcp/webhook/` and update them to the new path.
+
+### **Phase 4: Testing and Validation**
+
+This phase ensures the migration was successful and didn't introduce regressions.
+
+1.  **Update Existing Tests**:
+    *   Modify `test_pr_embedding.py` to import from the new location:
+        *   **From**: `from crawler_mcp.webhook.server import WebhookProcessor, WebhookConfig`
+        *   **To**: `from crawler_mcp.crawlers.optimized.webhook.server import WebhookProcessor` and `from crawler_mcp.crawlers.optimized.webhook.config import WebhookConfig`
+
+2.  **Create New, Self-Contained Tests**:
+    *   Create a new test suite: `crawler_mcp/crawlers/optimized/tests/webhook/`.
+    *   Add `test_server.py` with `pytest-asyncio` tests that validate the webhook's endpoints and logic *without importing anything from outside the `optimized` directory*.
+
+3.  **Verification Matrix**:
+| Component | Verification Step | Success Criteria |
+| :--- | :--- | :--- |
+| **Static Analysis** | Run `ruff .` and `mypy .` | No new errors are introduced. |
+| **Unit Tests** | Run `pytest crawler_mcp/crawlers/optimized/tests/webhook/` | All new, isolated webhook tests pass. |
+| **Integration Tests** | Run `pytest tests/` | All existing tests pass after import updates. |
+| **External Scripts** | Execute `scripts/batch_extraction.py` and `manual_extraction.py` | Scripts run successfully against the new webhook's API endpoints. |
+| **Packaging** | Run `pip install .` and then `crawler-webhook --help` | The CLI entry point works and points to the new module. |
+| **Runtime (Supervisor)** | Restart `supervisord` and run `supervisorctl status` | The `optimized-webhook` process is running correctly. |
+| **Runtime (Docker)** | Run `docker-compose up --build` | The container builds successfully and the webhook service starts without errors. |
+
+### **Phase 5: Cleanup and Documentation**
+
+After successful validation, remove the old artifacts.
+
+1.  **Delete Old Webhook**:
+    *   `rm -rf crawler_mcp/webhook/`
+
+2.  **Update Documentation**:
+    *   Review `README.md`, `AGENTS.md`, and any documents in `docs/` for references to the old webhook path and update them.
+
+### **Target Directory Layout**
+
+```
+crawler_mcp/
+└── crawlers/
+    └── optimized/
+        ├── webhook/
+        │   ├── __init__.py
+        │   ├── server.py       # Main FastAPI app, endpoints
+        │   ├── config.py       # WebhookConfig, env loading
+        │   └── processor.py    # (Optional) Business logic extracted from server.py
+        ├── tests/
+        │   └── webhook/
+        │       ├── __init__.py
+        │       └── test_server.py  # New, isolated tests
+        └── logs/
+            └── webhook.log         # New, isolated log file
+```
+
+### **Rollback Plan**
+
+If validation fails at any step before Phase 5, revert the changes:
+1.  Revert modifications to `pyproject.toml`, `supervisord.conf`, and `crawler_mcp/server.py`.
+2.  Delete the newly created `crawler_mcp/crawlers/optimized/webhook/` directory and its associated tests and logs.
+3.  The original `crawler_mcp/webhook/` remains untouched until the final cleanup phase, ensuring a safe rollback path.

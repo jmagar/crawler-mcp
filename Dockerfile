@@ -54,9 +54,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder --chown=crawler:crawler /app/.venv /app/.venv
 
 # Pre-create directories with correct ownership
-RUN mkdir -p /app/webhook_outputs /app/logs /app/data /app/data/.crawl4ai \
+RUN mkdir -p /app/logs /app/data /app/data/.crawl4ai \
     /home/crawler/.cache/ms-playwright && \
-    chown -R crawler:crawler /app/webhook_outputs /app/logs /app/data \
+    chown -R crawler:crawler /app/logs /app/data \
     /home/crawler/.cache/ms-playwright
 
 # Set environment variables

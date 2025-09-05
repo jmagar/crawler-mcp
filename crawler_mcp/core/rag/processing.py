@@ -5,11 +5,13 @@ This module orchestrates the complete RAG processing workflow, integrating
 chunking, deduplication, embedding generation, and vector storage.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from ...config import settings
 from ...core.vectors import VectorService
@@ -109,7 +111,9 @@ class ProgressTracker:
             else "completed",
         }
 
-    async def report_progress(self, callback: Callable | None) -> None:
+    async def report_progress(
+        self, callback: Callable[[int, int, str], None] | None
+    ) -> None:
         """
         Report progress using the provided callback.
 
@@ -128,7 +132,7 @@ class ProgressTracker:
 class WorkflowManager:
     """Manages complex RAG workflow execution."""
 
-    def __init__(self, pipeline: Optional["ProcessingPipeline"] = None) -> None:
+    def __init__(self, pipeline: ProcessingPipeline | None = None) -> None:
         self.pipeline = pipeline if pipeline is not None else ProcessingPipeline()
         self.progress_tracker = ProgressTracker()
 
@@ -136,7 +140,7 @@ class WorkflowManager:
         self,
         crawl_result: CrawlResult,
         config: dict[str, Any],
-        progress_callback: Callable | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
     ) -> dict[str, Any]:
         """
         Execute the complete RAG processing pipeline.
@@ -216,7 +220,11 @@ class WorkflowManager:
         actual_duration = end_time - start_time
 
         # Update result with actual processing time
-        if isinstance(result, dict) and "statistics" in result:
+        if (
+            isinstance(result, dict)
+            and "statistics" in result
+            and isinstance(result["statistics"], dict)
+        ):
             result["statistics"]["processing_duration_seconds"] = actual_duration
 
         return result
@@ -306,14 +314,15 @@ class ProcessingPipeline:
         self.deduplication_manager = (
             VectorDeduplicationManager()
         )  # Uses default 0.95 threshold
-        self.vector_service = None
+        self.vector_service: VectorService | None = None
         self._initialized = False
 
     async def initialize(self) -> None:
         """Initialize the processing pipeline."""
         if not self._initialized:
             self.vector_service = VectorService()
-            await self.vector_service.__aenter__()
+            if self.vector_service is not None:
+                await self.vector_service.__aenter__()
             # Pass the vector service to the deduplication manager
             self.deduplication_manager.vector_service = self.vector_service
             await self.embedding_pipeline.initialize()
@@ -325,7 +334,7 @@ class ProcessingPipeline:
         if self._initialized:
             await self.embedding_pipeline.shutdown()
             if self.vector_service:
-                await self.vector_service.__aexit__(None, None, None)
+                await self.vector_service.__aexit__(None, None, None)  # type: ignore[arg-type]
             self._initialized = False
             logger.info("Processing pipeline shutdown")
 
@@ -404,9 +413,11 @@ class ProcessingPipeline:
                 )
 
             try:
-                existing_chunks = await self.vector_service.get_chunks_by_source(
-                    source_url
-                )
+                existing_chunks = []
+                if self.vector_service is not None:
+                    existing_chunks = await self.vector_service.get_chunks_by_source(
+                        source_url
+                    )
                 existing_chunks_map = {
                     chunk["id"]: chunk.get("content_hash", "")
                     for chunk in existing_chunks
@@ -584,9 +595,11 @@ class ProcessingPipeline:
                     )
 
                 try:
-                    chunks_deleted = await self.vector_service.delete_chunks_by_ids(
-                        list(all_ids_to_delete)
-                    )
+                    chunks_deleted = 0
+                    if self.vector_service is not None:
+                        chunks_deleted = await self.vector_service.delete_chunks_by_ids(
+                            list(all_ids_to_delete)
+                        )
                     logger.info(
                         f"Deleted {chunks_deleted} chunks ({len(orphaned_ids)} orphaned, {len(legacy_chunks_to_delete)} legacy)"
                     )
@@ -644,7 +657,11 @@ class ProcessingPipeline:
 
         try:
             storage_start_time = time.monotonic()
-            stored_count = await self.vector_service.upsert_documents(document_chunks)
+            stored_count = 0
+            if self.vector_service is not None:
+                stored_count = await self.vector_service.upsert_documents(
+                    document_chunks
+                )
             storage_duration = time.monotonic() - storage_start_time
             logger.info(
                 f"Stored {stored_count} document chunks in vector database in {storage_duration:.2f}s"
@@ -666,7 +683,7 @@ class ProcessingPipeline:
 
     async def process_pages_batch(
         self, pages: list[PageContent], batch_size: int = 50
-    ) -> tuple[list[DocumentChunk], dict[str, Any]]:
+    ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
         """
         Process a batch of pages.
 
@@ -745,7 +762,9 @@ class ProcessingPipeline:
         for i in range(0, len(chunks), batch_size):
             batch = chunks[i : i + batch_size]
             try:
-                stored = await self.vector_service.upsert_documents(batch)
+                stored = 0
+                if self.vector_service is not None:
+                    stored = await self.vector_service.upsert_documents(batch)
                 total_stored += stored
             except Exception as e:
                 logger.error(f"Error storing chunk batch: {e}")
