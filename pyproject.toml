@@ -237,6 +237,35 @@ module = [
 ]
 ignore_missing_imports = true
 
+[tool.coverage.run]
+data_file = ".cache/.coverage"
+source = ["crawler_mcp"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/site-packages/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+]
+precision = 2
+skip_covered = false
+show_missing = true
+
+[tool.coverage.html]
+directory = ".cache/htmlcov"
+
+[tool.coverage.xml]
+output = ".cache/coverage.xml"
+
 [tool.pytest.ini_options]
 cache_dir = ".cache/pytest"
 minversion = "8.4"
