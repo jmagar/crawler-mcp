@@ -64,20 +64,20 @@ class CircuitBreaker:
         self.total_successes = 0
         self.circuit_opens = 0
 
-    def call(self, func: Callable[..., Any]) -> Any:
+    def call(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Execute function with circuit breaker protection."""
         # Disallow in running event loop to prevent RuntimeError
         try:
             asyncio.get_running_loop()
         except RuntimeError:
             # No running loop
-            return asyncio.run(self.async_call(func))
+            return asyncio.run(self.async_call(func, *args, **kwargs))
         else:
             raise RuntimeError(
                 f"Circuit breaker '{self.name}': call() cannot be used in an active event loop; use 'await async_call(...)' instead"
             )
 
-    async def async_call(self, func: Callable[..., Any]) -> Any:
+    async def async_call(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         """Execute async function with circuit breaker protection."""
         self.total_calls += 1
 
@@ -91,7 +91,13 @@ class CircuitBreaker:
 
         try:
             # Execute the function
-            result = await func() if asyncio.iscoroutinefunction(func) else func()
+            if asyncio.iscoroutinefunction(func):
+                result = await func(*args, **kwargs)
+            else:
+                # Check if result is awaitable (for functools.partial of async functions)
+                result = func(*args, **kwargs)
+                if hasattr(result, '__await__'):
+                    result = await result
 
             # Success - update state
             self.success_count += 1

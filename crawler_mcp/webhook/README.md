@@ -21,7 +21,7 @@ GitHub Org Webhook → SWAG Reverse Proxy → Docker Container
                                                     ↓
                                               Extract AI Prompts
                                                     ↓
-                                              /webhook_outputs/
+                                              /output/pr/
 ```
 
 ## Configuration
@@ -47,7 +47,7 @@ REPOS_TO_TRACK=*
 
 # Processing settings
 WEBHOOK_SCRIPT_PATH=./scripts/extract_coderabbit_prompts.py
-WEBHOOK_OUTPUT_DIR=./webhook_outputs
+WEBHOOK_OUTPUT_DIR=./output
 WEBHOOK_MAX_CONCURRENT_PROCESSES=5
 
 # Event type filtering
@@ -305,24 +305,29 @@ Service information endpoint with available endpoints list.
 4. **Content Analysis**: Verify comment contains relevant AI content
 5. **Queue Processing**: Add to background processing queue
 6. **Script Execution**: Run extraction script asynchronously
-7. **Output Storage**: Save results to `/webhook_outputs/` directory
+7. **Output Storage**: Save results to `/output/pr/` directory
 
 ## Output Files
 
-Extracted prompts are saved as Markdown files in `webhook_outputs/`:
+PR analysis data is saved in structured format in `output/pr/`:
 
 ```
-webhook_outputs/
-├── ai-prompts-pr-123.md
-├── ai-prompts-pr-124.md
+output/pr/
+├── myrepo-123/
+│   ├── items.ndjson
+│   ├── suggestions.json
+│   └── resolved.json
+├── myrepo-124/
+│   ├── items.ndjson
+│   ├── suggestions.json
+│   └── resolved.json
 └── ...
 ```
 
-Each file contains:
-- PR metadata (repository, PR number, timestamps)
-- Extracted AI prompts with source attribution
-- Code suggestions and committable changes
-- Processing statistics
+Each PR directory contains:
+- `items.ndjson`: Structured PR data (comments, reviews, metadata)
+- `suggestions.json`: Extracted code suggestions and fixes
+- `resolved.json`: Resolution status and applied changes
 
 ## Error Handling
 
@@ -368,12 +373,12 @@ The webhook outputs can be integrated with MCP tools (future enhancement):
 @mcp.tool
 async def list_ai_prompts() -> List[str]:
     """List extracted AI prompt files."""
-    return list(Path("webhook_outputs").glob("*.md"))
+    return list(Path("output/pr").glob("*/items.ndjson"))
 
 @mcp.tool
 async def get_ai_prompts(pr_number: int) -> str:
     """Get AI prompts for specific PR."""
-    file_path = Path(f"webhook_outputs/ai-prompts-pr-{pr_number}.md")
+    file_path = Path(f"output/pr/{{repo}}-{pr_number}/items.ndjson")
     return file_path.read_text() if file_path.exists() else "Not found"
 ```
 

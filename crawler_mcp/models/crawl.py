@@ -4,7 +4,7 @@ Data models for web crawling operations.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
@@ -45,7 +45,7 @@ class PageContent(BaseModel):
     images: list[str] = Field(default_factory=list)
     word_count: int = 0
     metadata: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @field_validator("word_count", mode="before")
     @classmethod
@@ -107,9 +107,10 @@ class CrawlRequest(BaseModel):
     @field_validator("url")
     @classmethod
     def validate_urls(cls, v: str | list[str]) -> list[str]:
-        if isinstance(v, str):
-            return [v]
-        return v
+        urls = [v] if isinstance(v, str) else v
+        if not urls:
+            raise ValueError("url must be non-empty")
+        return urls
 
 
 class CrawlStatistics(BaseModel):
@@ -145,7 +146,7 @@ class CrawlResult(BaseModel):
     statistics: CrawlStatistics = Field(default_factory=CrawlStatistics)
     errors: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-    start_time: datetime = Field(default_factory=datetime.utcnow)
+    start_time: datetime = Field(default_factory=lambda: datetime.now(UTC))
     end_time: datetime | None = None
 
     @property

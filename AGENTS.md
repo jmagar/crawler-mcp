@@ -5,11 +5,11 @@
 - `tests/`: pytest suite with asyncio markers; integration and slow tests are marked.
 - `scripts/`: utility scripts for batch/manual extraction and helpers.
 - `docs/`, `examples/`, `data/`, `logs/`: ancillary assets and outputs.
-- Key entry points: `crawler_mcp/server.py` (MCP server), `crawler_mcp/webhook/server.py` (webhook).
+- Key entry points: `crawler_mcp/crawlers/optimized/server.py` (MCP server), `crawler_mcp/webhook/server.py` (webhook).
 
 ## Build, Test, and Development Commands
 - Install (editable): `uv sync` or `pip install -e .`
-- Run server (dev): `fastmcp dev crawler_mcp/server.py`
+- Run server (dev): `fastmcp dev crawler_mcp/crawlers/optimized/server.py`
 - Run server (direct): `uv run python -m crawler_mcp.server` or `uv run crawler-mcp`
 - Webhook (direct): `uv run python -m crawler_mcp.webhook.server` or `uv run crawler-webhook`
 - Tests (quick): `uv run pytest -m "not slow and not requires_services"`
@@ -44,5 +44,5 @@
 - Prefer `uv run` for all tool invocations to use the locked environment.
 
 ## Agent-Specific Notes
-- Install for Claude: `fastmcp install claude-desktop crawler_mcp/server.py`.
-- Exposed MCP tools are registered in `crawler_mcp/server.py`; add new tools under `crawler_mcp/tools/` and register via `register_*_tools`.
+- Install for Claude: `fastmcp install claude-desktop crawler_mcp/crawlers/optimized/server.py`.
+- Exposed MCP tools are registered in `crawler_mcp/crawlers/optimized/server.py`; add new tools under `crawler_mcp/crawlers/optimized/tools/` and register via `register_*_tools`.

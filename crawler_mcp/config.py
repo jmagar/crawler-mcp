@@ -692,6 +692,8 @@ class CrawlerMCPSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_file=(
+            # Prioritize optimized server .env as the source of truth
+            Path(__file__).parent / "crawlers" / "optimized" / ".env",
             Path(__file__).parent.parent / ".env",  # Project root .env
             ".env",  # Current directory .env as fallback
         ),

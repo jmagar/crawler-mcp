@@ -3,7 +3,7 @@ Document CRUD operations for Qdrant vector database.
 """
 
 import logging
-from typing import Any
+from typing import Any, TypedDict
 
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
@@ -18,6 +18,14 @@ from ...models.rag import DocumentChunk
 from .base import BaseVectorService, _parse_timestamp
 
 logger = logging.getLogger(__name__)
+
+
+class BulkOperation(TypedDict, total=False):
+    """Type definition for bulk operations."""
+    action: str  # Required: "update", "delete", "insert"
+    id: str  # Required: document ID
+    vector: list[float]  # Optional: for insert/update operations
+    payload: dict[str, Any]  # Optional: for insert/update operations
 
 
 class DocumentOperations(BaseVectorService):
@@ -339,12 +347,12 @@ class DocumentOperations(BaseVectorService):
             logger.error(f"Error deleting chunks by ID: {e}")
             return 0
 
-    async def bulk_update_documents(self, operations: list[dict[str, Any]]) -> int:
+    async def bulk_update_documents(self, operations: list[BulkOperation]) -> int:
         """
         Perform bulk update operations on documents.
 
         Args:
-            operations: List of operation dictionaries with 'action' and data
+            operations: List of typed bulk operation dictionaries
 
         Returns:
             Number of successful operations

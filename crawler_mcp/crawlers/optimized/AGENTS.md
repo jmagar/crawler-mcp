@@ -1,16 +1,16 @@
 # Repository Guidelines
 
 ## Project Structure & Module Organization
-- `crawler_mcp/`: core package (server, config, tools, middleware, services, webhook).
+- `crawler_mcp/`: core package (server, config, tools, middleware, core services, webhook).
 - `tests/`: pytest suite with asyncio; `unit`, `integration`, `slow`, `requires_services` markers.
 - `scripts/`: batch/manual extraction helpers. `docs/`, `examples/`, `data/`, `logs/` for assets/outputs.
-- Entry points: `crawler_mcp/server.py` (MCP server), `crawler_mcp/webhook/server.py` (webhook).
-- MCP tools live in `crawler_mcp/tools/` and are registered in `crawler_mcp/server.py`.
+- Entry points: `crawler_mcp/crawlers/optimized/server.py` (MCP server), `crawler_mcp/webhook/server.py` (webhook).
+- MCP tools live in `crawler_mcp/crawlers/optimized/tools/` and are registered in `crawler_mcp/crawlers/optimized/server.py`.
 
 ## Build, Test, and Development Commands
 - Install (editable): `uv sync` or `pip install -e .`
-- Run server (dev): `fastmcp dev crawler_mcp/server.py`
-- Run server (direct): `uv run python -m crawler_mcp.server` or `uv run crawler-mcp`
+- Run server (dev): `fastmcp dev crawler_mcp/crawlers/optimized/server.py`
+- Run server (direct): `uv run python -m crawler_mcp.crawlers.optimized.server` or `uv run crawler-mcp`
 - Webhook (direct): `uv run python -m crawler_mcp.webhook.server` or `uv run crawler-webhook`
 - Tests (quick): `uv run pytest -m "not slow and not requires_services"`
 - Full tests + coverage: `uv run pytest --cov=crawler_mcp --cov-report=term-missing`
@@ -40,5 +40,5 @@
 - Prefer `uv run` for tools to use the locked environment.
 
 ## Agent-Specific Notes
-- Install for Claude Desktop: `fastmcp install claude-desktop crawler_mcp/server.py`.
-- Register new MCP tools under `crawler_mcp/tools/` and wire them in `register_*_tools` within the server.
+- Install for Claude Desktop: `fastmcp install claude-desktop crawler_mcp/crawlers/optimized/server.py`.
+- Register new MCP tools under `crawler_mcp/crawlers/optimized/tools/` and wire them in `register_*_tools` within the server.

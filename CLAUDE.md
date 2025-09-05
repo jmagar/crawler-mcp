@@ -58,19 +58,19 @@ Use the built-in `fastmcp` command-line interface for an efficient development c
 #### Interactive Debugging (`fastmcp dev`)
 For interactive testing and debugging, use the `dev` command. This runs your server with the MCP Inspector UI, which allows you to call tools and inspect responses.
 
-- **Start the dev server**: `fastmcp dev crawler_mcp/server.py --with crawl4ai --with qdrant-client --with torch`
+- **Start the dev server**: `fastmcp dev crawler_mcp/crawlers/optimized/server.py --with crawl4ai --with qdrant-client --with torch`
 
 #### Running the Server (`fastmcp run`)
 To run the server directly (e.g., for integration testing or production), use the `run` command.
 
-- **Run with HTTP transport**: `fastmcp run crawler_mcp/server.py --transport http`
-- **Run with dependencies**: `fastmcp run crawler_mcp/server.py --with crawl4ai --with qdrant-client`
+- **Run with HTTP transport**: `fastmcp run crawler_mcp/crawlers/optimized/server.py --transport http`
+- **Run with dependencies**: `fastmcp run crawler_mcp/crawlers/optimized/server.py --with crawl4ai --with qdrant-client`
 
 ## Installation & Deployment
 Once your server is ready, use the `fastmcp install` command to make it available to MCP clients.
 
-- **For supported clients**: Use `fastmcp install <client_name> crawler_mcp/server.py` (e.g., `claude-code`, `claude-desktop`). This handles dependency management with `uv` automatically.
-- **For other clients**: Generate a standard configuration file using `fastmcp install mcp-json crawler_mcp/server.py > mcp_config.json`. This file can be used with any MCP-compatible client.
+- **For supported clients**: Use `fastmcp install <client_name> crawler_mcp/crawlers/optimized/server.py` (e.g., `claude-code`, `claude-desktop`). This handles dependency management with `uv` automatically.
+- **For other clients**: Generate a standard configuration file using `fastmcp install mcp-json crawler_mcp/crawlers/optimized/server.py > mcp_config.json`. This file can be used with any MCP-compatible client.
 
 ## FastMCP Specific Patterns
 

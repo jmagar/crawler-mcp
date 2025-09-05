@@ -1,17 +1,9 @@
 """
-Crawling strategies for different source types.
+Crawler strategies package.
+
+Legacy strategies have been removed. Use the optimized crawler
+implementation under `crawler_mcp.crawlers.optimized` for all server
+and tool functionality.
 """
 
-from .base import BaseCrawlStrategy
-from .directory import DirectoryCrawlStrategy, DirectoryRequest
-from .repository import RepositoryCrawlStrategy, RepositoryRequest
-from .web import WebCrawlStrategy
-
-__all__ = [
-    "BaseCrawlStrategy",
-    "DirectoryCrawlStrategy",
-    "DirectoryRequest",
-    "RepositoryCrawlStrategy",
-    "RepositoryRequest",
-    "WebCrawlStrategy",
-]
+__all__: list[str] = []

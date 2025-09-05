@@ -69,7 +69,7 @@ class GitHubClient:
         path: str,
         params: dict[str, Any] | None = None,
         per_page: int = 100,
-        max_pages: int = 20,
+        max_pages: int = 50,
     ) -> list[Any]:
         result: list[Any] = []
         page = 1
@@ -128,6 +128,26 @@ class GitHubClient:
             raw = base64.b64decode(data.get("content", "") or b"")
             return enc, raw.decode("utf-8", errors="replace")
         return enc, str(data.get("content", "") or "")
+
+    async def get_timeline(
+        self, owner: str, repo: str, number: int
+    ) -> list[dict[str, Any]]:
+        """Get PR timeline events for force-push detection. Uses preview header."""
+        await self._ensure_session()
+        assert self._session is not None
+
+        # Timeline API requires preview header for full access
+        headers = {"Accept": "application/vnd.github.mockingbird-preview+json"}
+        url = f"{self.base_url}/repos/{owner}/{repo}/issues/{number}/timeline"
+
+        async with self._session.get(url, headers=headers) as resp:
+            if resp.status >= 400:
+                text = await resp.text()
+                if resp.status == 404:
+                    # Timeline not available, return empty list
+                    return []
+                raise RuntimeError(f"GitHub API error {resp.status}: {text[:200]}")
+            return await resp.json()
 
     async def post_issue_comment(
         self, owner: str, repo: str, number: int, body: str

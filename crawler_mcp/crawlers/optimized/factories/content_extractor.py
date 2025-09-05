@@ -44,9 +44,13 @@ class ContentExtractorFactory:
         # Use provided values or fall back to config defaults
         # (Currently not used because content_filter is disabled by default to avoid placeholders.)
 
-        # TEMP FIX: Disable content filtering to prevent hash placeholders
-        # The PruningContentFilter is causing arun_many() to return hash placeholders
-        content_filter = None
+        # FIXED: Properly configure PruningContentFilter to avoid hash placeholders
+        # Using fixed threshold and conservative settings to prevent empty content extraction
+        content_filter = PruningContentFilter(
+            threshold=0.45,  # Lower threshold keeps more content (0.48 is default)
+            threshold_type="fixed",  # Fixed prevents dynamic calculation issues that caused hash placeholders
+            min_word_threshold=5,  # Reasonable minimum for real content (nodes with <5 words ignored)
+        )
 
         # Configure markdown generation options
         markdown_options = {
@@ -176,9 +180,9 @@ class ContentExtractorFactory:
             # Page processing optimizations
             remove_overlay_elements=True,  # Remove popups and overlays
             process_iframes=False,  # Skip iframes for performance
-            # Timing optimizations
+            # Timing optimizations - improved for JavaScript sites
             page_timeout=self.config.page_timeout,
-            delay_before_return_html=0.5,  # Brief delay for content loading
+            delay_before_return_html=2.0,  # Increased delay for JS content loading
             # Additional optimizations
             only_text=self.config.text_mode,  # Text-only mode for speed
             verbose=False,  # Disable verbose output for performance
@@ -189,15 +193,14 @@ class ContentExtractorFactory:
             if hasattr(rc, "enable_javascript"):
                 rc.enable_javascript = bool(self.config.javascript_enabled)
             if self.config.javascript_enabled:
-                # Allow some time for hydration and DOM stabilization
+                # Allow more time for hydration and DOM stabilization
                 if hasattr(rc, "wait_for_js_rendering"):
                     rc.wait_for_js_rendering = True
-                try:
+                from contextlib import suppress
+                with suppress(Exception):
                     rc.delay_before_return_html = max(
-                        1.0, float(rc.delay_before_return_html)
-                    )  # type: ignore[attr-defined]
-                except Exception:
-                    pass
+                        3.0, float(rc.delay_before_return_html)
+                    )  # type: ignore[attr-defined] - Increased to 3 seconds for JS
         except Exception:
             pass
 

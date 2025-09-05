@@ -648,17 +648,15 @@ class PerformanceMonitor:
     # Embeddings
     def record_embeddings_stats(self, **stats: Any) -> None:
         """Attach TEI embeddings summary to the performance report."""
-        try:
+        from contextlib import suppress
+        with suppress(Exception):
             self._embeddings_stats.update(stats)
-        except Exception:
-            pass
 
     def record_vectorstore_stats(self, **stats: Any) -> None:
         """Attach vector store (Qdrant) upsert summary to the report."""
-        try:
+        from contextlib import suppress
+        with suppress(Exception):
             self._vectorstore_stats.update(stats)
-        except Exception:
-            pass
 
     def _analyze_performance_trend(self) -> dict[str, Any]:
         """Analyze performance trends from samples"""

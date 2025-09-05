@@ -87,8 +87,8 @@ class OptimizedConfig:
     text_mode: bool = True
     """Disable image loading for maximum crawling speed"""
 
-    javascript_enabled: bool = False
-    """Enable JavaScript execution (reduces performance but handles dynamic content)"""
+    javascript_enabled: bool = True  # Changed default to True for better modern web support
+    """Enable JavaScript execution (necessary for modern web apps and documentation sites)"""
 
     # Retry behavior
     js_retry_enabled: bool = True
@@ -214,6 +214,19 @@ class OptimizedConfig:
 
     content_validation: bool = True
     """Enable content quality validation"""
+
+    # Placeholder Recovery (bounded retry)
+    placeholder_retry_enabled: bool = True
+    """Enable selective retry for pages flagged as placeholder/low-quality"""
+
+    placeholder_retry_attempts: int = 1
+    """Max retry attempts per affected URL (sequential)"""
+
+    placeholder_retry_with_js: bool = True
+    """Force JavaScript rendering during retry to improve extraction"""
+
+    placeholder_retry_timeout_ms: int = 15000
+    """Per-page timeout (ms) for retry pass"""
 
     # Fallback link discovery when sitemaps are missing
     fallback_link_discovery: bool = True
@@ -355,6 +368,11 @@ class OptimizedConfig:
             "log_rotation_backups": "LOG_ROTATION_BACKUPS",
             "cache_retention_hours": "CACHE_RETENTION_HOURS",
             "auto_cleanup": "AUTO_CLEANUP",
+            # Placeholder recovery
+            "placeholder_retry_enabled": "PLACEHOLDER_RETRY_ENABLED",
+            "placeholder_retry_attempts": "PLACEHOLDER_RETRY_ATTEMPTS",
+            "placeholder_retry_with_js": "PLACEHOLDER_RETRY_WITH_JS",
+            "placeholder_retry_timeout_ms": "PLACEHOLDER_RETRY_TIMEOUT_MS",
         }
 
         # Load configuration from environment

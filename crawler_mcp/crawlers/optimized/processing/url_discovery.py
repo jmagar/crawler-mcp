@@ -147,7 +147,7 @@ class URLDiscovery:
 
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            for i, (result, label) in enumerate(
+            for _i, (result, label) in enumerate(
                 zip(results, source_labels, strict=False)
             ):
                 if isinstance(result, list):

@@ -104,7 +104,7 @@ class QdrantConnectionPool:
         return AsyncQdrantClient(
             url=self.url,
             api_key=self.api_key,
-            timeout=int(self.timeout),
+            timeout=self.timeout,
         )
 
     async def _health_check_loop(self) -> None:
@@ -223,10 +223,10 @@ class QdrantConnectionPool:
                 raise
 
             except Exception:
-                # Other error - return connection to pool
+                # Other error - recycle connection as it may be broken
                 self.failed_requests += 1
                 if client:
-                    await self.available.put(client)
+                    await self._recycle_connection(client)
                 raise
 
     async def get_client(self) -> AsyncQdrantClient:

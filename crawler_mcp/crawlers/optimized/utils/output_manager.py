@@ -79,23 +79,27 @@ class OutputManager:
         except Exception:
             return "unknown"
 
-    def get_crawl_output_paths(self, url: str) -> dict[str, Path]:
+    def get_crawl_output_paths(self, url: str, session_id: str | None = None) -> dict[str, Path]:
         """Get all output paths for a crawl.
 
         Args:
             url: URL being crawled
+            session_id: Unique session identifier. If None, uses "latest" for backward compatibility.
 
         Returns:
             Dictionary with output paths: html, ndjson, report
         """
         domain = self.sanitize_domain(url)
-        latest_dir = self.crawls_dir / domain / "latest"
-        latest_dir.mkdir(parents=True, exist_ok=True)
+
+        # Use session_id if provided, otherwise fall back to "latest" for backward compatibility
+        dir_name = session_id if session_id else "latest"
+        session_dir = self.crawls_dir / domain / dir_name
+        session_dir.mkdir(parents=True, exist_ok=True)
 
         return {
-            "html": latest_dir / "combined.html",
-            "ndjson": latest_dir / "pages.ndjson",
-            "report": latest_dir / "report.json",
+            "html": session_dir / "combined.html",
+            "ndjson": session_dir / "pages.ndjson",
+            "report": session_dir / "report.json",
         }
 
     def get_pr_output_paths(
@@ -111,7 +115,7 @@ class OutputManager:
         Returns:
             Dictionary with output paths: items, suggestions, resolved
         """
-        pr_name = f"{owner}_{repo}_{pr_number}"
+        pr_name = f"{repo}-{pr_number}"
         pr_dir = self.pr_dir / pr_name
         pr_dir.mkdir(parents=True, exist_ok=True)
 
@@ -122,25 +126,22 @@ class OutputManager:
         }
 
     def rotate_crawl_backup(self, domain: str) -> None:
-        """Move latest/ to backup/ before new crawl.
+        """Prepare domain directory for new crawl session (no longer needed with session-based dirs).
+
+        This method is kept for backward compatibility but no longer performs rotation
+        since each crawl now gets a unique session directory. The 'latest' symlink
+        will be updated to point to the new session.
 
         Args:
             domain: Sanitized domain name
         """
-        domain_dir = self.crawls_dir / domain
-        latest_dir = domain_dir / "latest"
-        backup_dir = domain_dir / "backup"
-
-        if latest_dir.exists():
-            # Remove old backup
-            if backup_dir.exists():
-                shutil.rmtree(backup_dir)
-
-            # Move latest to backup
-            latest_dir.rename(backup_dir)
+        # With session-based directories, we don't need to rotate anything
+        # Each crawl gets its own unique directory and the 'latest' symlink
+        # will be updated to point to the newest session
+        pass
 
     def save_crawl_outputs(
-        self, domain: str, html: str | None, pages: list[Any], report: dict[str, Any]
+        self, domain: str, html: str | None, pages: list[Any], report: dict[str, Any], session_id: str | None = None
     ) -> None:
         """Save all crawl outputs with automatic rotation.
 
@@ -149,8 +150,9 @@ class OutputManager:
             html: Combined HTML content
             pages: List of page objects
             report: Performance report data
+            session_id: Unique session identifier. If None, uses "latest" for backward compatibility.
         """
-        paths = self.get_crawl_output_paths(f"https://{domain}")
+        paths = self.get_crawl_output_paths(f"https://{domain}", session_id)
 
         try:
             # Write HTML output
@@ -184,12 +186,38 @@ class OutputManager:
             # Log error but don't fail the crawl
             print(f"Warning: Failed to save outputs for {domain}: {e}")
 
-    def update_index(self, domain: str, metadata: dict[str, Any]) -> None:
+    def create_latest_symlink(self, domain: str, session_id: str) -> None:
+        """Create a 'latest' symlink pointing to the most recent session directory.
+
+        Args:
+            domain: Sanitized domain name
+            session_id: Session identifier to link to
+        """
+        try:
+            domain_dir = self.crawls_dir / domain
+            latest_link = domain_dir / "latest"
+            session_target = session_id
+
+            # Remove existing symlink or directory
+            if latest_link.exists() or latest_link.is_symlink():
+                if latest_link.is_symlink():
+                    latest_link.unlink()
+                elif latest_link.is_dir():
+                    shutil.rmtree(latest_link)
+
+            # Create new symlink pointing to session directory
+            latest_link.symlink_to(session_target, target_is_directory=True)
+
+        except Exception as e:
+            print(f"Warning: Failed to create latest symlink for {domain}: {e}")
+
+    def update_index(self, domain: str, metadata: dict[str, Any], session_id: str | None = None) -> None:
         """Update _index.json with crawl metadata.
 
         Args:
             domain: Sanitized domain name
             metadata: Crawl metadata to store
+            session_id: Unique session identifier. If provided, tracks individual sessions.
         """
         try:
             # Load existing index
@@ -201,15 +229,29 @@ class OutputManager:
 
             # Update domain entry
             if domain not in index["domains"]:
-                index["domains"][domain] = {}
+                index["domains"][domain] = {"sessions": {}}
 
-            # Move latest to backup if it exists
-            if "latest" in index["domains"][domain]:
-                index["domains"][domain]["backup"] = index["domains"][domain]["latest"]
+            # If session_id is provided, track individual sessions
+            if session_id:
+                # Initialize sessions dict if it doesn't exist (backward compatibility)
+                if "sessions" not in index["domains"][domain]:
+                    index["domains"][domain]["sessions"] = {}
 
-            # Add new latest
+                # Add session-specific metadata
+                index["domains"][domain]["sessions"][session_id] = {
+                    **metadata,
+                    "session_id": session_id,
+                    "timestamp": time.time(),
+                    "size_bytes": self._get_domain_size(domain),
+                }
+
+                # Update latest pointer to most recent session
+                index["domains"][domain]["latest_session"] = session_id
+
+            # For backward compatibility, also update "latest" entry
             index["domains"][domain]["latest"] = {
                 **metadata,
+                "session_id": session_id,
                 "timestamp": time.time(),
                 "size_bytes": self._get_domain_size(domain),
             }

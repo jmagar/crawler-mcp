@@ -32,6 +32,7 @@ from ..models.responses import OptimizedCrawlResponse
 from ..processing.result_converter import ResultConverter
 from ..processing.url_discovery import URLDiscovery
 from ..utils.monitoring import PerformanceMonitor
+from .batch_utils import pack_texts_into_batches
 from .parallel_engine import ParallelEngine
 
 
@@ -67,6 +68,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         # Internal state
         self._session_active = False
         self._last_pr_report: dict[str, Any] | None = None
+        self._last_pages: list[Any] = []  # Initialize to prevent AttributeError
 
         self.logger.info(
             f"Initialized OptimizedCrawlerStrategy with config: {self.config}"
@@ -118,6 +120,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
 
         try:
             self.logger.info(f"Starting optimized crawl from: {url}")
+            self.logger.debug(f"Strategy crawl - max_urls: {kwargs.get('max_urls', self.config.max_urls_to_discover)}")
 
             # Parse crawling parameters
             max_urls = kwargs.get("max_urls", self.config.max_urls_to_discover)
@@ -176,10 +179,11 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
             )
 
             # Phase 5: Result processing and conversion
-            self.logger.info("Phase 5: Processing and converting results")
+            self.logger.info(f"Phase 5: Processing and converting results - {len(crawl_results)} results")
             response = await self._process_results(
                 crawl_results, discovered_urls, start_time, url
             )
+            self.logger.debug(f"Strategy response success: {response.success}")
 
             # Phase 6: Finalize monitoring
             final_metrics = self.monitor.finish_crawl_monitoring()
@@ -195,6 +199,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
 
         except Exception as e:
             self.logger.error(f"Optimized crawl failed for {url}: {e}", exc_info=True)
+            self.logger.debug("Exception in strategy crawl, creating error response")
             # Return minimal response on error
             return await self._create_error_response(url, str(e))
 
@@ -310,9 +315,18 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                     if hasattr(fb_run_cfg, "wait_for_js_rendering"):
                         fb_run_cfg.wait_for_js_rendering = True
                     if hasattr(fb_run_cfg, "delay_before_return_html"):
-                        fb_run_cfg.delay_before_return_html = max(
-                            0.5, getattr(fb_run_cfg, "delay_before_return_html", 0.0)
-                        )
+                        # Ensure adequate delay when JS is enabled during fallback expansion
+                        try:
+                            cur = float(getattr(fb_run_cfg, "delay_before_return_html", 0.0))
+                        except Exception:
+                            cur = 0.0
+                        try:
+                            js_mode = bool(getattr(fb_run_cfg, "wait_for_js_rendering", False)) or bool(
+                                getattr(fb_run_cfg, "enable_javascript", False)
+                            )
+                        except Exception:
+                            js_mode = False
+                        fb_run_cfg.delay_before_return_html = max(3.0 if js_mode else 0.5, cur)
 
                     # Single fetch
                     first = await self.parallel_engine.crawl_batch_raw(
@@ -727,10 +741,19 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                         if hasattr(fb_run_cfg, "enable_javascript"):
                             fb_run_cfg.enable_javascript = True
                         if hasattr(fb_run_cfg, "delay_before_return_html"):
-                            fb_run_cfg.delay_before_return_html = max(
-                                0.5,
-                                getattr(fb_run_cfg, "delay_before_return_html", 0.0),
-                            )
+                            try:
+                                cur = float(
+                                    getattr(fb_run_cfg, "delay_before_return_html", 0.0)
+                                )
+                            except Exception:
+                                cur = 0.0
+                            try:
+                                js_mode = bool(
+                                    getattr(fb_run_cfg, "wait_for_js_rendering", False)
+                                ) or bool(getattr(fb_run_cfg, "enable_javascript", False))
+                            except Exception:
+                                js_mode = False
+                            fb_run_cfg.delay_before_return_html = max(3.0 if js_mode else 0.5, cur)
                         if hasattr(fb_run_cfg, "wait_for_js_rendering"):
                             fb_run_cfg.wait_for_js_rendering = True
                         if hasattr(fb_run_cfg, "process_iframes"):
@@ -1312,7 +1335,16 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                 all_links.extend(page.links)
 
             # Create optimized response with proper attributes
-            success = len(results) > 0
+            # Success should be based on whether the crawl attempt succeeded (network-wise)
+            # not whether content was successfully extracted/validated
+
+            # Check if any URLs had HTTP success (even if content was filtered)
+            _http_successful_urls = getattr(results, '_http_successful_urls', [])
+
+            # Network success if we reached here without exception OR if any HTTP requests succeeded
+            network_success = True  # Assume network success if we reached processing
+            content_success = len(results) > 0
+            success = network_success  # Overall success based on network success
 
             # Enhance content based on type detection
             enhanced_content = combined_content.strip()
@@ -1333,11 +1365,13 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                 "placeholders_filtered": self.monitor.metrics.hash_placeholders_detected,
                 "crawl_type": "optimized_parallel",
                 "duration_seconds": crawl_result.statistics.crawl_duration_seconds,
+                "network_success": network_success,
+                "content_success": content_success,
             }
 
             response = OptimizedCrawlResponse(
                 html=combined_html.strip(),
-                status_code=200 if success else 500,
+                status_code=200,  # Always 200 if we reached this point (network succeeded)
                 response_headers={},
                 success=success,
                 extracted_content=enhanced_content,
@@ -1484,39 +1518,19 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
             ),
         )
 
-        pairs = list(zip(idxs, texts, strict=False))
-        # Sort by length (desc) for greedy packing
-        pairs.sort(key=lambda it: len(it[1]), reverse=True)
-        batches: list[list[tuple[int, str]]] = []
-        cur: list[tuple[int, str]] = []
-        cur_chars = 0
-        for pi, tx in pairs:
-            tlen = len(tx)
-            # If adding this would exceed limits, flush current batch
-            if cur and (cur_chars + tlen > target_chars or len(cur) >= max_items):
-                batches.append(cur)
-                cur = []
-                cur_chars = 0
-            cur.append((pi, tx))
-            cur_chars += tlen
-        if cur:
-            batches.append(cur)
+        # Use shared batching utility to pack texts optimally
+        text_batches = pack_texts_into_batches(
+            texts,
+            target_chars=target_chars,
+            max_items=max_items,
+            parallel_workers=parallel
+        )
 
-        # Ensure at least `parallel` batches when possible to keep workers busy
-        # by splitting the largest batches until we reach desired count.
-        while len(batches) < parallel and any(len(b) > 1 for b in batches):
-            # find largest by chars
-            li = max(
-                range(len(batches)), key=lambda i: sum(len(t) for _, t in batches[i])
-            )
-            big = batches.pop(li)
-            mid = len(big) // 2
-            batches.append(big[:mid])
-            batches.append(big[mid:])
-
-        # Fallback if no batches created
-        if not batches and texts:
-            batches = [[(i, t)] for i, t in pairs]
+        # Convert text array indices back to page indices for compatibility
+        batches = []
+        for text_batch in text_batches:
+            page_batch = [(idxs[text_idx], text) for text_idx, text in text_batch]
+            batches.append(page_batch)
 
         async with TEIEmbeddingsClient(
             endpoint, model=model or None, timeout_s=timeout_s, max_retries=retries

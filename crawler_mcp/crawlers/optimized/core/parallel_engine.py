@@ -12,6 +12,7 @@ import logging
 import re
 import time
 from collections.abc import AsyncGenerator, Callable
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any
 
@@ -82,6 +83,7 @@ class ParallelEngine:
         successful_results = []
         failed_urls = []
         hash_placeholder_urls = []
+        http_successful_urls = []  # Track URLs that had HTTP success but failed content validation
 
         self.logger.info(f"Starting parallel crawl of {len(urls)} URLs")
 
@@ -130,6 +132,9 @@ class ParallelEngine:
                         results_processed += 1
 
                         if result.success:
+                            # Track HTTP successful URLs regardless of content validation
+                            http_successful_urls.append(result.url)
+
                             # Validate content quality
                             if self._is_valid_content(result, monitor):
                                 successful_results.append(result)
@@ -169,6 +174,9 @@ class ParallelEngine:
                         results_processed += 1
 
                         if result.success:
+                            # Track HTTP successful URLs regardless of content validation
+                            http_successful_urls.append(result.url)
+
                             # Validate content quality
                             if self._is_valid_content(result, monitor):
                                 successful_results.append(result)
@@ -219,8 +227,96 @@ class ParallelEngine:
         self.logger.info(
             f"Parallel crawl completed: {len(successful_results)} successful, "
             f"{len(failed_urls)} failed, {len(hash_placeholder_urls)} hash placeholders, "
+            f"{len(http_successful_urls)} HTTP successful, "
             f"{duration:.1f}s, {pages_per_second:.2f} pages/sec"
         )
+
+        # Store HTTP success info for strategy to use
+        if hasattr(successful_results, 'append'):
+            # Add HTTP success metadata to the results list for strategy access
+            successful_results._http_successful_urls = http_successful_urls
+            successful_results._all_requested_urls = urls
+
+        # Optional bounded retry for placeholder/invalid pages
+        try:
+            if (
+                hash_placeholder_urls
+                and getattr(self.config, "placeholder_retry_enabled", True)
+                and int(getattr(self.config, "placeholder_retry_attempts", 1)) > 0
+            ):
+                urls_to_retry = list(dict.fromkeys(hash_placeholder_urls))
+                attempts = int(getattr(self.config, "placeholder_retry_attempts", 1))
+                self.logger.info(
+                    f"Retrying {len(urls_to_retry)} URLs flagged as placeholders (attempts={attempts})"
+                )
+
+                # Build a quality-focused run config for retry
+                retry_config = self._clone_config(crawler_config)
+                from contextlib import suppress
+                with suppress(Exception):
+                    retry_config.enable_javascript = bool(
+                        getattr(self.config, "placeholder_retry_with_js", True)
+                    )
+                with suppress(Exception):
+                    retry_config.wait_for_js_rendering = True
+                try:
+                    cur = float(getattr(retry_config, "delay_before_return_html", 0.5))
+                except Exception:
+                    cur = 0.5
+                try:
+                    js_retry = bool(getattr(retry_config, "wait_for_js_rendering", False)) or bool(
+                        getattr(retry_config, "enable_javascript", False)
+                    )
+                except Exception:
+                    js_retry = False
+                with suppress(Exception):
+                    retry_config.delay_before_return_html = (
+                        max(3.0, cur) if js_retry else max(1.0, cur)
+                    )
+                with suppress(Exception):
+                    retry_config.page_timeout = max(
+                        int(getattr(self.config, "placeholder_retry_timeout_ms", 15000)),
+                        int(getattr(retry_config, "page_timeout", 10000)),
+                    )
+
+                for _ in range(attempts):
+                    if not urls_to_retry:
+                        break
+                    recovered: dict[str, CrawlResult] = {}
+                    try:
+                        async with AsyncWebCrawler(config=browser_config) as crawler:
+                            await self._enable_resource_blocking(crawler)
+                            gen = await crawler.arun_many(
+                                urls=urls_to_retry, config=retry_config, dispatcher=dispatcher
+                            )
+                            if hasattr(gen, "__aiter__"):
+                                async for rr in gen:
+                                    if rr.success and self._is_valid_content(rr, None):
+                                        recovered[rr.url] = rr
+                            else:
+                                for rr in gen:
+                                    if rr.success and self._is_valid_content(rr, None):
+                                        recovered[rr.url] = rr
+                    except Exception as e:
+                        self.logger.warning(f"Retry pass failed: {e}")
+
+                    # Merge recovered results, remove from retry set
+                    if recovered:
+                        self.logger.info(f"Recovered {len(recovered)} pages after retry")
+                        # Replace prior filtered items (dedupe by URL)
+                        seen = {r.url for r in successful_results}
+                        for url, rr in recovered.items():
+                            if url not in seen:
+                                successful_results.append(rr)
+                                seen.add(url)
+                        urls_to_retry = [u for u in urls_to_retry if u not in recovered]
+
+                if urls_to_retry:
+                    self.logger.info(
+                        f"Dropping {len(urls_to_retry)} pages that remained placeholders after retry"
+                    )
+        except Exception as e:
+            self.logger.debug(f"Retry flow skipped due to error: {e}")
 
         return successful_results
 
@@ -546,18 +642,30 @@ class ParallelEngine:
         # Clone the configuration to avoid modifying the original
         batch_config = self._clone_config(crawler_config)
 
-        # Optimize for batch processing
+        # Optimize for batch processing without breaking JS-rendered pages
+        # Preserve or raise delay when JS rendering is enabled; keep moderate delay otherwise.
         try:
-            batch_config.delay_before_return_html = 0.5  # Moderate delay
+            current_delay = float(getattr(batch_config, "delay_before_return_html", 0.5))
         except Exception:
-            pass
+            current_delay = 0.5
+
+        try:
+            js_mode = bool(getattr(batch_config, "wait_for_js_rendering", False)) or bool(
+                getattr(batch_config, "enable_javascript", False)
+            )
+        except Exception:
+            js_mode = False
+
+        from contextlib import suppress
+        with suppress(Exception):
+            batch_config.delay_before_return_html = (
+                max(current_delay, 3.0) if js_mode else max(current_delay, 0.5)
+            )
 
         # Ensure proper content extraction settings
         if hasattr(batch_config, "verbose"):
-            try:
+            with suppress(Exception):
                 batch_config.verbose = False  # Reduce log noise
-            except Exception:
-                pass
 
         return batch_config
 
@@ -604,10 +712,8 @@ class ParallelEngine:
                 pass
 
         if hasattr(rc, "verbose"):
-            try:
+            with suppress(Exception):
                 rc.verbose = False
-            except Exception:
-                pass
 
         return rc
 
@@ -629,15 +735,18 @@ class ParallelEngine:
         if not result.success:
             return False
 
-        # Check if markdown content exists
-        if not hasattr(result, "markdown") or not result.markdown:
-            return False
-
         try:
-            # Extract content for validation
+            # Extract content for validation with fallbacks
             content = self._extract_content_for_validation(result)
 
             if not content:
+                # Log diagnostic info for empty content
+                self.logger.debug(
+                    f"Empty content for {getattr(result, 'url', 'unknown')}: "
+                    f"markdown={hasattr(result, 'markdown')}, "
+                    f"html={hasattr(result, 'html')}, "
+                    f"extracted_content={hasattr(result, 'extracted_content')}"
+                )
                 return False
 
             # If validation is disabled, apply only minimal invalid checks
@@ -682,22 +791,65 @@ class ParallelEngine:
             return False
 
     def _extract_content_for_validation(self, result: CrawlResult) -> str:
-        """Extract content from result for validation"""
+        """Extract content from result for validation with multiple fallbacks"""
         try:
-            if (
-                hasattr(result.markdown, "fit_markdown")
-                and result.markdown.fit_markdown
-            ):
-                return str(result.markdown.fit_markdown).strip()
-            elif (
-                hasattr(result.markdown, "raw_markdown")
-                and result.markdown.raw_markdown
-            ):
-                return str(result.markdown.raw_markdown).strip()
-            else:
-                return str(result.markdown).strip()
-        except Exception:
-            return ""
+            # Try markdown extraction first (original approach)
+            if hasattr(result, "markdown") and result.markdown:
+                if (
+                    hasattr(result.markdown, "fit_markdown")
+                    and result.markdown.fit_markdown
+                ):
+                    content = str(result.markdown.fit_markdown).strip()
+                    if content:
+                        return content
+                elif (
+                    hasattr(result.markdown, "raw_markdown")
+                    and result.markdown.raw_markdown
+                ):
+                    content = str(result.markdown.raw_markdown).strip()
+                    if content:
+                        return content
+                else:
+                    content = str(result.markdown).strip()
+                    if content:
+                        return content
+
+            # Fallback 1: Try extracted_content attribute
+            if hasattr(result, "extracted_content") and result.extracted_content:
+                content = str(result.extracted_content).strip()
+                if content:
+                    self.logger.debug(f"Using extracted_content fallback for {getattr(result, 'url', 'unknown')}")
+                    return content
+
+            # Fallback 2: Try basic HTML text extraction
+            if hasattr(result, "html") and result.html:
+                import re
+                html = str(result.html)
+                # Remove script and style elements
+                html = re.sub(r"<script[\s\S]*?</script>", " ", html, flags=re.IGNORECASE)
+                html = re.sub(r"<style[\s\S]*?</style>", " ", html, flags=re.IGNORECASE)
+                # Remove HTML tags
+                text = re.sub(r"<[^>]+>", " ", html)
+                # Clean whitespace
+                text = re.sub(r"\s+", " ", text).strip()
+                if text and len(text) > 50:  # Minimum threshold for HTML text
+                    self.logger.debug(f"Using HTML text fallback for {getattr(result, 'url', 'unknown')}")
+                    return text
+
+            # Fallback 3: Try any text-like attribute
+            for attr in ["text", "content", "cleaned_html"]:
+                if hasattr(result, attr):
+                    content = getattr(result, attr)
+                    if content and isinstance(content, str):
+                        content = content.strip()
+                        if content:
+                            self.logger.debug(f"Using {attr} fallback for {getattr(result, 'url', 'unknown')}")
+                            return content
+
+        except Exception as e:
+            self.logger.debug(f"Content extraction failed for {getattr(result, 'url', 'unknown')}: {e}")
+
+        return ""
 
     def _validate_content_quality(self, content: str) -> bool:
         """
@@ -737,15 +889,45 @@ class ParallelEngine:
         if len(words) <= 1:
             return "very_short"
 
-        # Hash-like placeholders
-        if len(text) == 32 and text.isalnum():
-            return "hash_like32"
+        # Check for common JavaScript framework loading states (whitelist)
+        js_loading_patterns = [
+            "loading", "please wait", "initializing", "loading...",
+            "react", "vue", "angular", "next.js", "nuxt", "svelte",
+            "app is loading", "javascript required", "enabling javascript"
+        ]
+        text_lower = text.lower()
+        if (any(pattern in text_lower for pattern in js_loading_patterns)
+                and len(text) < 200 and len(words) < 30):
+            # This might be a JS loading state, not a hash placeholder
+            # Still very minimal, could be legitimate loading state
+            return None
+
+        # More lenient hash-like detection - only flag if very specific patterns
+        if (
+            (len(text) in (32, 40, 64))
+            and text.isalnum()
+            and not any(word in text_lower for word in [
+                'the', 'and', 'for', 'with', 'this', 'that'
+            ])
+        ):
+            # Additional check: real hash placeholders usually have no spaces or common words
+            return f"hash_like{len(text)}"
+
+        # Lines comprised only of many '#' - but allow some markdown
+        try:
+            first_line = text.splitlines()[0].strip()
+            if len(first_line) >= 12 and set(first_line) == {"#"}:  # Increased threshold
+                return "hash_wall"
+        except Exception:
+            pass
+
         # Allow Markdown headings (leading '#'), but catch explicit placeholders
         if text.startswith("hash:"):
             return "hash_prefix"
 
-        # Word count threshold (lenient)
-        if len(words) < max(1, self.config.min_word_count // 5):
+        # More lenient word count threshold for JavaScript sites
+        min_words = max(5, self.config.min_word_count // 8)  # Much more lenient
+        if len(words) < min_words:
             return "too_few_words"
 
         # Suspicious average word length

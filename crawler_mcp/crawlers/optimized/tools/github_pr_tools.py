@@ -12,6 +12,12 @@ from fastmcp import Context, FastMCP
 
 from ..clients.github_client import GitHubClient
 from ..clients.qdrant_http_client import QdrantClient
+from ..utils.content_extractor import (
+    extract_all_content,
+    get_content_summary,
+    is_content_relevant,
+    parse_file_reference_from_body,
+)
 from ..utils.github_suggestions import (
     apply_suggestion as _apply_sugg,
 )
@@ -65,85 +71,157 @@ async def list_pr_items_impl(
 
     # Reviews
     for rv in reviews:
-        base_items.append(
-            {
-                "item_type": "pr_review",
-                "owner": owner,
-                "repo": repo,
-                "pr_number": pr_number,
-                "author": (rv.get("user", {}) or {}).get("login", ""),
-                "created_at": _to_iso(rv.get("submitted_at")),
-                "updated_at": _to_iso(rv.get("submitted_at")),
-                "canonical_url": rv.get("html_url")
-                or f"https://github.com/{owner}/{repo}/pull/{pr_number}#pullrequestreview-{rv.get('id')}",
-                "item_id": rv.get("id"),
-                "review_state": rv.get("state", ""),
-                "body": rv.get("body", "") or "",
-            }
-        )
+        body = rv.get("body", "") or ""
+        author = (rv.get("user", {}) or {}).get("login", "")
+
+        # Extract relevant content
+        extracted_content = extract_all_content(body, author)
+
+        item = {
+            "item_type": "pr_review",
+            "owner": owner,
+            "repo": repo,
+            "pr_number": pr_number,
+            "author": author,
+            "created_at": _to_iso(rv.get("submitted_at")),
+            "updated_at": _to_iso(rv.get("submitted_at")),
+            "canonical_url": rv.get("html_url")
+            or f"https://github.com/{owner}/{repo}/pull/{pr_number}#pullrequestreview-{rv.get('id')}",
+            "item_id": rv.get("id"),
+            "review_state": rv.get("state", ""),
+            "body": body,  # Keep original body for compatibility
+            "extracted_content": [
+                {
+                    "type": content.content_type,
+                    "content": content.content,
+                    "metadata": content.metadata
+                } for content in extracted_content
+            ],
+            "content_summary": get_content_summary(extracted_content),
+            "has_relevant_content": is_content_relevant(body, author),
+        }
+
+        base_items.append(item)
 
     # Review comments
     for c in rcomments:
         is_outdated = c.get("position") is None
-        base_items.append(
-            {
-                "item_type": "pr_review_comment",
-                "owner": owner,
-                "repo": repo,
-                "pr_number": pr_number,
-                "author": (c.get("user", {}) or {}).get("login", ""),
-                "created_at": _to_iso(c.get("created_at")),
-                "updated_at": _to_iso(c.get("updated_at")),
-                "canonical_url": c.get("html_url")
-                or f"https://github.com/{owner}/{repo}/pull/{pr_number}#discussion_r{c.get('id')}",
-                "item_id": c.get("id"),
-                "path": c.get("path", ""),
-                "line": c.get("line") or c.get("original_line"),
-                "original_line": c.get("original_line"),
-                "position": c.get("position"),
-                "original_position": c.get("original_position"),
-                "commit_id": c.get("commit_id"),
-                "original_commit_id": c.get("original_commit_id"),
-                "diff_hunk": c.get("diff_hunk", ""),
-                "in_reply_to_id": c.get("in_reply_to_id"),
-                "pull_request_review_id": c.get("pull_request_review_id"),
-                "is_outdated": bool(is_outdated),
-                "is_resolved": False,
-                "body": c.get("body", "") or "",
-                # Suggestion parsing
-                "suggestions": [
-                    s.content for s in extract_suggestions(c.get("body", "") or "")
-                ],
-            }
-        )
+        body = c.get("body", "") or ""
+        author = (c.get("user", {}) or {}).get("login", "")
+
+        # Extract relevant content
+        extracted_content = extract_all_content(body, author)
+
+        # Parse file reference if not provided in API
+        file_ref = None
+        if not c.get("path"):
+            file_ref = parse_file_reference_from_body(body)
+
+        item = {
+            "item_type": "pr_review_comment",
+            "owner": owner,
+            "repo": repo,
+            "pr_number": pr_number,
+            "author": author,
+            "created_at": _to_iso(c.get("created_at")),
+            "updated_at": _to_iso(c.get("updated_at")),
+            "canonical_url": c.get("html_url")
+            or f"https://github.com/{owner}/{repo}/pull/{pr_number}#discussion_r{c.get('id')}",
+            "item_id": c.get("id"),
+            "path": c.get("path", ""),
+            "line": c.get("line") or c.get("original_line"),
+            "original_line": c.get("original_line"),
+            "position": c.get("position"),
+            "original_position": c.get("original_position"),
+            "commit_id": c.get("commit_id"),
+            "original_commit_id": c.get("original_commit_id"),
+            "diff_hunk": c.get("diff_hunk", ""),
+            "in_reply_to_id": c.get("in_reply_to_id"),
+            "pull_request_review_id": c.get("pull_request_review_id"),
+            "is_outdated": bool(is_outdated),
+            "is_resolved": False,
+            "body": body,  # Keep original body for compatibility
+            # Suggestion parsing (existing)
+            "suggestions": [
+                s.content for s in extract_suggestions(body)
+            ],
+            # New content extraction
+            "extracted_content": [
+                {
+                    "type": content.content_type,
+                    "content": content.content,
+                    "metadata": content.metadata
+                } for content in extracted_content
+            ],
+            "content_summary": get_content_summary(extracted_content),
+            "has_relevant_content": is_content_relevant(body, author),
+            "parsed_file_ref": file_ref,
+        }
+
+        base_items.append(item)
 
     # Conversation comments
     for c in icomments:
-        base_items.append(
-            {
-                "item_type": "pr_conversation_comment",
-                "owner": owner,
-                "repo": repo,
-                "pr_number": pr_number,
-                "author": (c.get("user", {}) or {}).get("login", ""),
-                "created_at": _to_iso(c.get("created_at")),
-                "updated_at": _to_iso(c.get("updated_at")),
-                "canonical_url": c.get("html_url")
-                or f"https://github.com/{owner}/{repo}/pull/{pr_number}",
-                "item_id": c.get("id"),
-                "body": c.get("body", "") or "",
-            }
-        )
+        body = c.get("body", "") or ""
+        author = (c.get("user", {}) or {}).get("login", "")
+
+        # Extract relevant content
+        extracted_content = extract_all_content(body, author)
+
+        # Parse file reference from comment body
+        file_ref = parse_file_reference_from_body(body)
+
+        item = {
+            "item_type": "pr_conversation_comment",
+            "owner": owner,
+            "repo": repo,
+            "pr_number": pr_number,
+            "author": author,
+            "created_at": _to_iso(c.get("created_at")),
+            "updated_at": _to_iso(c.get("updated_at")),
+            "canonical_url": c.get("html_url")
+            or f"https://github.com/{owner}/{repo}/pull/{pr_number}",
+            "item_id": c.get("id"),
+            "body": body,  # Keep original body for compatibility
+            "extracted_content": [
+                {
+                    "type": content.content_type,
+                    "content": content.content,
+                    "metadata": content.metadata
+                } for content in extracted_content
+            ],
+            "content_summary": get_content_summary(extracted_content),
+            "has_relevant_content": is_content_relevant(body, author),
+            "parsed_file_ref": file_ref,
+        }
+
+        base_items.append(item)
 
     return base_items
 
 
 def _apply_filters(
-    items: list[dict[str, Any]], filters: dict[str, Any] | None
-) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]],
+    filters: dict[str, Any] | None,
+    last_force_push_date: datetime | None = None,
+    dismissed_review_ids: set[Any] | None = None,
+    filtered_comment_ids: set[Any] | None = None,
+    verbose_filtering: bool = False
+) -> tuple[list[dict[str, Any]], int]:
+    """
+    Apply sophisticated filtering to PR items with enhanced noise reduction.
+    
+    Returns tuple of (filtered_items, filtered_count).
+    """
     if not filters:
-        return items
+        return items, 0
+
     out = []
+    filtered_count = 0
+    dismissed_review_ids = dismissed_review_ids or set()
+    filtered_comment_ids = filtered_comment_ids or set()
+
+    # Basic filters
     authors = {a.lower() for a in (filters.get("authors") or [])}
     bots = {b.lower() for b in (filters.get("bots") or [])}
     item_types = set(filters.get("item_types") or [])
@@ -152,36 +230,141 @@ def _apply_filters(
     after = str(filters.get("after") or "").strip() or None
     before = str(filters.get("before") or "").strip() or None
     globs = list(filters.get("file_globs") or [])
+
+    # Enhanced filtering options (from old script)
+    filter_dismissed_reviews = bool(filters.get("filter_dismissed_reviews", True))
+    filter_resolved_threads = bool(filters.get("filter_resolved_threads", True))
+    filter_stale_code = bool(filters.get("filter_stale_code", True))
+    filter_old_comments = bool(filters.get("filter_old_comments", True))
+    filter_pre_force_push = bool(filters.get("filter_pre_force_push", True))
+    max_comment_age_days = int(filters.get("max_comment_age_days", 30))
+    max_update_age_days = int(filters.get("max_update_age_days", 7))
+
     for it in items:
+        should_filter = False
+        filter_reason = ""
+        item_id = it.get("item_id")
+
+        # Basic filtering (existing logic)
         a = str(it.get("author", "")).lower()
         if authors and a not in authors:
-            continue
-        if bots and a in bots:
-            continue
-        if item_types and it.get("item_type") not in item_types:
-            continue
-        if only_unresolved and bool(it.get("is_resolved", False)) is True:
-            continue
-        if min_length and len(str(it.get("body", ""))) < min_length:
-            continue
-        if globs:
+            should_filter = True
+            filter_reason = f"author not in allowed list: {a}"
+        elif bots and a not in bots:
+            should_filter = True
+            filter_reason = f"bot not in allowed list: {a}"
+        elif item_types and it.get("item_type") not in item_types:
+            should_filter = True
+            filter_reason = f"item type not allowed: {it.get('item_type')}"
+        elif only_unresolved and bool(it.get("is_resolved", False)) is True:
+            should_filter = True
+            filter_reason = "item marked as resolved"
+        elif min_length and len(str(it.get("body", ""))) < min_length:
+            should_filter = True
+            filter_reason = f"body too short: {len(str(it.get('body', '')))}"
+        elif globs:
             p = str(it.get("path", ""))
             if p and not any(fnmatch.fnmatch(p, g) for g in globs):
-                continue
-        if after or before:
+                should_filter = True
+                filter_reason = f"path doesn't match globs: {p}"
+        elif after or before:
             ts = it.get("created_at") or ""
             try:
                 dt = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
                 if after and dt < datetime.fromisoformat(after.replace("Z", "+00:00")):
-                    continue
-                if before and dt > datetime.fromisoformat(
-                    before.replace("Z", "+00:00")
-                ):
-                    continue
+                    should_filter = True
+                    filter_reason = f"created before: {after}"
+                elif before and dt > datetime.fromisoformat(before.replace("Z", "+00:00")):
+                    should_filter = True
+                    filter_reason = f"created after: {before}"
             except Exception:
                 pass
-        out.append(it)
-    return out
+
+        # Enhanced filtering logic (from old script)
+        if not should_filter:
+            body = str(it.get("body", ""))
+
+            # Filter dismissed/pending reviews
+            if (filter_dismissed_reviews and
+                it.get("item_type") == "pr_review" and
+                it.get("review_state") in ["DISMISSED", "PENDING"]):
+                should_filter = True
+                filter_reason = f"dismissed/pending review: {it.get('review_state')}"
+                if item_id:
+                    dismissed_review_ids.add(item_id)
+
+            # Filter comments from dismissed/pending reviews
+            elif (filter_dismissed_reviews and
+                  it.get("pull_request_review_id") and
+                  it.get("pull_request_review_id") in dismissed_review_ids):
+                should_filter = True
+                filter_reason = f"comment from dismissed review: {it.get('pull_request_review_id')}"
+
+            # Filter replies to filtered comments
+            elif (it.get("in_reply_to_id") and
+                  it.get("in_reply_to_id") in filtered_comment_ids):
+                should_filter = True
+                filter_reason = f"reply to filtered comment: {it.get('in_reply_to_id')}"
+
+            # Filter outdated positions (original logic)
+            elif (it.get("position") is None and
+                  it.get("original_position") is not None):
+                should_filter = True
+                filter_reason = "outdated position in diff"
+
+            # Enhanced resolved detection
+            elif (filter_resolved_threads and
+                  (it.get("is_resolved") is True or
+                   (body and any(phrase in body.lower() for phrase in [
+                       "resolved", "fixed", "addressed", "done", "completed",
+                       "no longer relevant", "outdated"])))):
+                should_filter = True
+                filter_reason = "resolved conversation"
+
+            # Filter stale code suggestions
+            elif (filter_stale_code and
+                  it.get("diff_hunk") and
+                  it.get("original_commit_id") and
+                  not it.get("position")):
+                should_filter = True
+                filter_reason = "stale code suggestion (diff context changed)"
+
+            # Filter old comments
+            elif filter_old_comments and it.get("created_at"):
+                try:
+                    created_date = datetime.fromisoformat(
+                        it["created_at"].replace("Z", "+00:00"))
+                    updated_date = datetime.fromisoformat(
+                        it.get("updated_at", it["created_at"]).replace("Z", "+00:00"))
+                    now = datetime.now().astimezone()
+
+                    # Filter comments older than max age with no recent updates
+                    if ((now - created_date).days > max_comment_age_days and
+                        (now - updated_date).days > max_update_age_days):
+                        should_filter = True
+                        filter_reason = (f"stale comment (created {(now - created_date).days} days ago, "
+                                       f"last updated {(now - updated_date).days} days ago)")
+
+                    # Filter comments created before force-push
+                    elif (filter_pre_force_push and
+                          last_force_push_date and
+                          created_date < last_force_push_date):
+                        should_filter = True
+                        filter_reason = "comment predates force-push (likely outdated)"
+
+                except (ValueError, TypeError):
+                    pass  # Skip filtering if date parsing fails
+
+        if should_filter:
+            filtered_count += 1
+            if item_id:
+                filtered_comment_ids.add(item_id)
+            if verbose_filtering:
+                print(f"⚠️  Filtered {it.get('item_type', 'item')} {item_id}: {filter_reason}")
+        else:
+            out.append(it)
+
+    return out, filtered_count
 
 
 def register_github_pr_tools(mcp: FastMCP) -> None:
@@ -228,7 +411,9 @@ def register_github_pr_tools(mcp: FastMCP) -> None:
             iid = str(it.get("item_id") or it.get("canonical_url") or "")
             if iid and iid in reg:
                 it["is_resolved"] = bool(reg.get(iid))
-        return _apply_filters(items, filters)
+        # For now, just use enhanced filtering without timeline
+        filtered_items, filtered_count = _apply_filters(items, filters)
+        return filtered_items
 
     @mcp.tool
     async def get_file_context(

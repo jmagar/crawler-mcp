@@ -5,11 +5,13 @@ This module orchestrates the complete RAG processing workflow, integrating
 chunking, deduplication, embedding generation, and vector storage.
 """
 
+from __future__ import annotations
+
 import logging
 import time
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from ...config import settings
 from ...core.vectors import VectorService
@@ -130,7 +132,7 @@ class ProgressTracker:
 class WorkflowManager:
     """Manages complex RAG workflow execution."""
 
-    def __init__(self, pipeline: Optional["ProcessingPipeline"] = None) -> None:
+    def __init__(self, pipeline: ProcessingPipeline | None = None) -> None:
         self.pipeline = pipeline if pipeline is not None else ProcessingPipeline()
         self.progress_tracker = ProgressTracker()
 

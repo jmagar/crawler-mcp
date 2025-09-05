@@ -75,6 +75,15 @@ def _save_registry(data: dict[str, Any]) -> None:
 
 def _build_filters_from_args(ns: argparse.Namespace) -> dict[str, Any]:
     f: dict[str, Any] = {}
+
+    # Parse enhanced filters from JSON if provided
+    if hasattr(ns, 'filters') and ns.filters:
+        try:
+            f.update(json.loads(ns.filters))
+        except json.JSONDecodeError:
+            pass  # Ignore invalid JSON
+
+    # Override with individual arguments (these take precedence)
     if ns.authors:
         f["authors"] = [s.strip() for s in ns.authors.split(",") if s.strip()]
     if ns.bots:
@@ -102,7 +111,11 @@ def cmd_pr_list(ns: argparse.Namespace) -> int:
         iid = str(it.get("item_id") or it.get("canonical_url") or "")
         if iid and iid in reg:
             it["is_resolved"] = bool(reg.get(iid))
-    items = _apply_filters(items, _build_filters_from_args(ns))
+
+    # Apply enhanced filtering
+    filters = _build_filters_from_args(ns)
+    filtered_items, filtered_count = _apply_filters(items, filters)
+    items = filtered_items
 
     # Always save to structured output path
     output_mgr = _get_output_manager()
@@ -269,7 +282,9 @@ def cmd_pr_comment(ns: argparse.Namespace) -> int:
 
 def cmd_pr_mark_resolved(ns: argparse.Namespace) -> int:
     items = ns.loop.run_until_complete(list_pr_items_impl(ns.owner, ns.repo, ns.pr))
-    items = _apply_filters(items, _build_filters_from_args(ns))
+    filters = _build_filters_from_args(ns)
+    filtered_items, filtered_count = _apply_filters(items, filters)
+    items = filtered_items
     reg_all = _load_registry()
     key = f"{ns.owner}/{ns.repo}#{ns.pr}"
     reg = reg_all.get(key, {})
@@ -367,6 +382,9 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--before", default=None)
     s.add_argument(
         "--ndjson", action="store_true", help="Save as NDJSON format instead of JSON"
+    )
+    s.add_argument(
+        "--filters", default=None, help="JSON string with enhanced filtering options"
     )
 
     # context

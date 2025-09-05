@@ -213,10 +213,7 @@ class ResultConverter:
                 image_list = result.media.get("images", [])
                 if isinstance(image_list, list):
                     for img in image_list:
-                        if isinstance(img, dict):
-                            src = img.get("src", "")
-                        else:
-                            src = str(img)
+                        src = img.get("src", "") if isinstance(img, dict) else str(img)
 
                         if src:
                             images.append(self._normalize_image_url(src))
