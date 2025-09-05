@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 
 class BulkOperation(TypedDict, total=False):
     """Type definition for bulk operations."""
+
     action: str  # Required: "update", "delete", "insert"
     id: str  # Required: document ID
     vector: list[float]  # Optional: for insert/update operations

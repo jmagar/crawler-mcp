@@ -76,12 +76,12 @@ Files to consider: crawler_mcp/webhook/server.py, pyproject.toml
 
 **Creating a Migration Plan**
 
-I’m tasked with producing a detailed migration plan for moving the webhook server into an optimized subpackage that's self-contained. This is purely planning, not coding. I need to outline phases, directory layout, import maps, validation steps, and potential risks. 
+I’m tasked with producing a detailed migration plan for moving the webhook server into an optimized subpackage that's self-contained. This is purely planning, not coding. I need to outline phases, directory layout, import maps, validation steps, and potential risks.
 
 I'll include notes for Docker, supervisor, and CI updates. Key steps involve creating a new subpackage and updating necessary configuration files. I’ll also provide a minimal file layout and map the old import paths to their new locations. This plan has to be concise yet comprehensive.
 **Developing a Cutover Checklist and Rollback Plan**
 
-I need to create a cutover checklist and rollback plan, ensuring both are thorough. I'll also develop a testing and verification matrix to confirm endpoints are functional, logs are generated, and CI tasks are completed. 
+I need to create a cutover checklist and rollback plan, ensuring both are thorough. I'll also develop a testing and verification matrix to confirm endpoints are functional, logs are generated, and CI tasks are completed.
 
 It’s important to update scripts that reference endpoints that are unaffected by this change. I might create a shim module at the old path to maintain compatibility, allowing it to import from the new optimized server. However, I must ensure the webhook implementation strictly adheres to using only the optimized directory code.
 **Updating Logging Path and Backward Compatibility**
@@ -96,15 +96,15 @@ I need to decide on the environment strategy: should we provide an `.env.optimiz
 For entry points, I’ll update the pyproject console script, examples, supervisors, and MCP server to spawn the new module correctly. It’s also important to update tests for CI, ensuring that everything related to `optimized` runs smoothly while providing a phased migration approach with clear tasks.
 **Designing the Migration Plan**
 
-I need to create a comprehensive migration plan for the webhook server's transition to the optimized subpackage. The import mapping would change from `crawler_mcp.webhook.server:WebhookConfig` to `crawler_mcp.crawlers.optimized.webhook.config:WebhookConfig`, ensuring we detail this clearly. 
+I need to create a comprehensive migration plan for the webhook server's transition to the optimized subpackage. The import mapping would change from `crawler_mcp.webhook.server:WebhookConfig` to `crawler_mcp.crawlers.optimized.webhook.config:WebhookConfig`, ensuring we detail this clearly.
 
-The directory layout will include necessary files like `__init__.py`, `server.py`, `config.py`, and `logs`. I'll develop a testing matrix covering unit tests, integration tests, and performance testing. 
+The directory layout will include necessary files like `__init__.py`, `server.py`, `config.py`, and `logs`. I'll develop a testing matrix covering unit tests, integration tests, and performance testing.
 
 Risks and mitigations will address circular dependencies, environment variable conflicts, and more. I’ll include a cutover checklist, rollback plan, and explicit commands. Each section will be numbered and clearly laid out. The log path will default to `logs/webhook.log`, with configurability options. Finally, I’ll make sure to draft everything concisely while maintaining clarity.
 [2025-09-04T01:20:49] codex
 **Developing a Cutover Checklist and Rollback Plan**
 
-I need to create a cutover checklist and rollback plan, ensuring both are thorough. I'll also develop a testing and verification matrix to confirm endpoints are functional, logs are generated, and CI tasks are completed. 
+I need to create a cutover checklist and rollback plan, ensuring both are thorough. I'll also develop a testing and verification matrix to confirm endpoints are functional, logs are generated, and CI tasks are completed.
 
 It’s important to update scripts that reference endpoints that are unaffected by this change. I might create a shim module at the old path to maintain compatibility, allowing it to import from the new optimized server. However, I must ensure the webhook implementation strictly adheres to using only the optimized directory code.
 [2025-09-04T01:20:49] codex
@@ -122,9 +122,9 @@ For entry points, I’ll update the pyproject console script, examples, supervis
 [2025-09-04T01:20:49] codex
 **Designing the Migration Plan**
 
-I need to create a comprehensive migration plan for the webhook server's transition to the optimized subpackage. The import mapping would change from `crawler_mcp.webhook.server:WebhookConfig` to `crawler_mcp.crawlers.optimized.webhook.config:WebhookConfig`, ensuring we detail this clearly. 
+I need to create a comprehensive migration plan for the webhook server's transition to the optimized subpackage. The import mapping would change from `crawler_mcp.webhook.server:WebhookConfig` to `crawler_mcp.crawlers.optimized.webhook.config:WebhookConfig`, ensuring we detail this clearly.
 
-The directory layout will include necessary files like `__init__.py`, `server.py`, `config.py`, and `logs`. I'll develop a testing matrix covering unit tests, integration tests, and performance testing. 
+The directory layout will include necessary files like `__init__.py`, `server.py`, `config.py`, and `logs`. I'll develop a testing matrix covering unit tests, integration tests, and performance testing.
 
 Risks and mitigations will address circular dependencies, environment variable conflicts, and more. I’ll include a cutover checklist, rollback plan, and explicit commands. Each section will be numbered and clearly laid out. The log path will default to `logs/webhook.log`, with configurability options. Finally, I’ll make sure to draft everything concisely while maintaining clarity.
 [2025-09-04T01:20:49] codex
@@ -209,7 +209,7 @@ Risks and mitigations will address circular dependencies, environment variable c
 
 - Old: `from crawler_mcp.webhook.server import WebhookConfig, WebhookProcessor, app`
 - New (preferred): `from crawler_mcp.crawlers.optimized.webhook.server import app`
-- New (typed classes): 
+- New (typed classes):
   - `from crawler_mcp.crawlers.optimized.webhook.config import WebhookConfig`
   - `from crawler_mcp.crawlers.optimized.webhook.processor import WebhookProcessor`
 

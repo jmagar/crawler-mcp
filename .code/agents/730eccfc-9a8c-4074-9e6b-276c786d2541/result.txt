@@ -39,7 +39,7 @@ async def scrape(
 ### Tool 2: `crawl` - Unified Smart Crawling
 
 ```python
-@mcp.tool  
+@mcp.tool
 async def crawl(
     ctx: Context,
     target: str,
@@ -72,7 +72,7 @@ def detect_target_type(target: str) -> tuple[str, dict[str, Any]]:
     elif re.match(r'^https://github\.com/[^/]+/[^/]+/pull/\d+', target):
         return 'github_pr', parse_pr_url(target)
     elif re.match(r'^https://github\.com/[^/]+/[^/]+', target):
-        return 'github_repo', parse_repo_url(target) 
+        return 'github_repo', parse_repo_url(target)
     elif os.path.isdir(target):
         return 'directory', {'path': Path(target).absolute()}
     elif target.endswith('.git') or 'github.com' in target:
@@ -109,7 +109,7 @@ def detect_target_type(target: str) -> tuple[str, dict[str, Any]]:
 }
 ```
 
-### Crawl Result Schema  
+### Crawl Result Schema
 ```python
 {
     "success": bool,
@@ -147,7 +147,7 @@ def detect_target_type(target: str) -> tuple[str, dict[str, Any]]:
 2. **"Fetching"** (20-80%): Page load, content extraction, optional screenshot
 3. **"Processing"** (80-100%): Content analysis, output saving, RAG ingestion
 
-### Crawl Phases (5 phases)  
+### Crawl Phases (5 phases)
 1. **"Planning"** (0-10%): Target detection, URL/path discovery
 2. **"Preparing"** (10-20%): Browser setup, strategy selection
 3. **"Crawling"** (20-80%): Parallel crawling with sub-progress
@@ -159,7 +159,7 @@ def detect_target_type(target: str) -> tuple[str, dict[str, Any]]:
 ### Core Components Used
 ```python
 # From optimized core
-from ..config import OptimizedConfig  
+from ..config import OptimizedConfig
 from ..core.strategy import OptimizedCrawlerStrategy
 from ..core.parallel_engine import ParallelEngine
 from ..factories.browser_factory import BrowserFactory
@@ -167,7 +167,7 @@ from ..utils.output_manager import OutputManager
 from ..utils.log_manager import LogManager
 from ..clients.github_client import GitHubClient
 
-# From models  
+# From models
 from ....models.crawl import PageContent, CrawlResult
 
 # For GitHub PR detection/processing
@@ -221,7 +221,7 @@ except Exception as e:
 3. Wire into `server.py` with registration
 4. Add basic parameter validation and error handling
 
-### Phase 2: Scrape Tool (3-4 hours) 
+### Phase 2: Scrape Tool (3-4 hours)
 1. Implement single-page scraping logic using OptimizedCrawlerStrategy
 2. Add screenshot capture via browser factories
 3. Implement progress reporting for 3 phases

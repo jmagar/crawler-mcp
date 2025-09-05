@@ -1,9 +1,6 @@
-"""
-Crawler strategies package.
+"""Deprecated crawlers package.
 
-Legacy strategies have been removed. Use the optimized crawler
-implementation under `crawler_mcp.crawlers.optimized` for all server
-and tool functionality.
+All crawler code has moved into the top-level `crawler_mcp` package.
 """
 
 __all__: list[str] = []

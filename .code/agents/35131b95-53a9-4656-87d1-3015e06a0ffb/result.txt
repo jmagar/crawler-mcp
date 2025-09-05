@@ -654,28 +654,28 @@ I'm thinking about how to scan repositories effectively. For local paths with a 
 I'm noticing that our GitHubClient doesn't currently implement the endpoint we need, but I think we can extend it! The plan should involve designing a minimal method to retrieve the repository tree. Alternatively, using the 'contents' API with recursion could be an option. I also want to reference OutputManager's 'save_crawl_outputs' method to write combined HTML and ndjson files. We could save a manifest ndjson and a summary JSON too while ensuring we follow the existing output conventions and logging.
 **Planning code adaptation**
 
-I’m considering how to adapt the code effectively, but it’s not time to add that just yet. The plan should involve using OutputManager.get_crawl_output_paths to retrieve html/ndjson/report, even if the html for repositories and directories might be None. Saving the ndjson as a manifest sounds acceptable. 
+I’m considering how to adapt the code effectively, but it’s not time to add that just yet. The plan should involve using OutputManager.get_crawl_output_paths to retrieve html/ndjson/report, even if the html for repositories and directories might be None. Saving the ndjson as a manifest sounds acceptable.
 
 For progress tracking, I’ll utilize progress_middleware to create a tracker and call ctx.report_progress with increasing phases. I also need to outline parameters for the scraping process, like URL, options for HTML and Markdown inclusion, and other relevant settings.
 **Defining response schema for scraping**
 
-I'm thinking we should set "stream" to False since it’s not needed here. 
+I'm thinking we should set "stream" to False since it’s not needed here.
 
-For the response schema in the scraping process, I want to define the kind as 'webpage' and include the URL, title, language (if available), word count, content excerpt, and possibly headers. 
+For the response schema in the scraping process, I want to define the kind as 'webpage' and include the URL, title, language (if available), word count, content excerpt, and possibly headers.
 
-I’ll specify paths for html, ndjson, and report relative to the output directory and gather stats like crawl time, content length, and link count. 
+I’ll specify paths for html, ndjson, and report relative to the output directory and gather stats like crawl time, content length, and link count.
 
 For the crawl input, I’ll unify it to string input for simplicity, setting max_urls to default at 1000 while keeping other important options in mind.
 **Planning the crawling structure and features**
 
-I'm determining how to set up the crawling process based on user choices. For including options, I want to default "include_html" to False and "include_markdown" to True. I'm also outlining how to detect various input formats for GitHub PRs and repository URLs. 
+I'm determining how to set up the crawling process based on user choices. For including options, I want to default "include_html" to False and "include_markdown" to True. I'm also outlining how to detect various input formats for GitHub PRs and repository URLs.
 
-The plan involves using different strategies for websites, directories, and repositories, ensuring we track progress across all phases. For GitHub PRs, I’ll reuse existing optimized tools to manage crawling effectively. 
+The plan involves using different strategies for websites, directories, and repositories, ensuring we track progress across all phases. For GitHub PRs, I’ll reuse existing optimized tools to manage crawling effectively.
 
 Finally, I’ll define result schemas and ensure parameters are validated, while providing clear error handling and logging outputs. This structure aims for a comprehensive yet efficient crawling method.
 **Planning the Crawling Tool Registration and Structure**
 
-I’m setting up the function `register_crawling_tools(mcp: FastMCP) -> None` to define two tools: 
+I’m setting up the function `register_crawling_tools(mcp: FastMCP) -> None` to define two tools:
 
 - `scrape(ctx, url, ..., rag_ingest: bool=False)`
 - `crawl(ctx, input, ..., rag_ingest: bool=False, pr_mode: Literal["synthesize","items"]="synthesize"`
@@ -692,31 +692,31 @@ I'm noticing that our GitHubClient doesn't currently implement the endpoint we n
 [2025-09-04T02:26:41] codex
 **Planning code adaptation**
 
-I’m considering how to adapt the code effectively, but it’s not time to add that just yet. The plan should involve using OutputManager.get_crawl_output_paths to retrieve html/ndjson/report, even if the html for repositories and directories might be None. Saving the ndjson as a manifest sounds acceptable. 
+I’m considering how to adapt the code effectively, but it’s not time to add that just yet. The plan should involve using OutputManager.get_crawl_output_paths to retrieve html/ndjson/report, even if the html for repositories and directories might be None. Saving the ndjson as a manifest sounds acceptable.
 
 For progress tracking, I’ll utilize progress_middleware to create a tracker and call ctx.report_progress with increasing phases. I also need to outline parameters for the scraping process, like URL, options for HTML and Markdown inclusion, and other relevant settings.
 [2025-09-04T02:26:41] codex
 **Defining response schema for scraping**
 
-I'm thinking we should set "stream" to False since it’s not needed here. 
+I'm thinking we should set "stream" to False since it’s not needed here.
 
-For the response schema in the scraping process, I want to define the kind as 'webpage' and include the URL, title, language (if available), word count, content excerpt, and possibly headers. 
+For the response schema in the scraping process, I want to define the kind as 'webpage' and include the URL, title, language (if available), word count, content excerpt, and possibly headers.
 
-I’ll specify paths for html, ndjson, and report relative to the output directory and gather stats like crawl time, content length, and link count. 
+I’ll specify paths for html, ndjson, and report relative to the output directory and gather stats like crawl time, content length, and link count.
 
 For the crawl input, I’ll unify it to string input for simplicity, setting max_urls to default at 1000 while keeping other important options in mind.
 [2025-09-04T02:26:41] codex
 **Planning the crawling structure and features**
 
-I'm determining how to set up the crawling process based on user choices. For including options, I want to default "include_html" to False and "include_markdown" to True. I'm also outlining how to detect various input formats for GitHub PRs and repository URLs. 
+I'm determining how to set up the crawling process based on user choices. For including options, I want to default "include_html" to False and "include_markdown" to True. I'm also outlining how to detect various input formats for GitHub PRs and repository URLs.
 
-The plan involves using different strategies for websites, directories, and repositories, ensuring we track progress across all phases. For GitHub PRs, I’ll reuse existing optimized tools to manage crawling effectively. 
+The plan involves using different strategies for websites, directories, and repositories, ensuring we track progress across all phases. For GitHub PRs, I’ll reuse existing optimized tools to manage crawling effectively.
 
 Finally, I’ll define result schemas and ensure parameters are validated, while providing clear error handling and logging outputs. This structure aims for a comprehensive yet efficient crawling method.
 [2025-09-04T02:26:41] codex
 **Planning the Crawling Tool Registration and Structure**
 
-I’m setting up the function `register_crawling_tools(mcp: FastMCP) -> None` to define two tools: 
+I’m setting up the function `register_crawling_tools(mcp: FastMCP) -> None` to define two tools:
 
 - `scrape(ctx, url, ..., rag_ingest: bool=False)`
 - `crawl(ctx, input, ..., rag_ingest: bool=False, pr_mode: Literal["synthesize","items"]="synthesize"`

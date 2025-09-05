@@ -145,7 +145,7 @@ However, this would restore the original bug, so proper fixes should be prioriti
 
 ## Implementation Status
 - ✅ Content filter fixed
-- ✅ Hash detection relaxed  
+- ✅ Hash detection relaxed
 - ✅ JavaScript enabled by default
 - ✅ Wait times improved
 - ✅ Documentation created

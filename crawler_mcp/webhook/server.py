@@ -28,23 +28,27 @@ from fastapi.responses import JSONResponse
 from rich.console import Console
 from rich.logging import RichHandler
 
-from ..crawlers.optimized.clients.qdrant_http_client import QdrantClient
+from ..clients.qdrant_http_client import QdrantClient
 
 # Import existing embedding infrastructure (reuse existing code)
-from ..crawlers.optimized.clients.tei_client import TEIEmbeddingsClient
-from ..crawlers.optimized.config import OptimizedConfig
-from ..crawlers.optimized.core.batch_utils import pack_items_into_batches
+from ..clients.tei_client import TEIEmbeddingsClient
+from ..crawl_core.batch_utils import pack_items_into_batches
+from ..optimized_config import OptimizedConfig
 
 # Import OutputManager for PR CLI integration
-from ..crawlers.optimized.utils.output_manager import OutputManager
+from ..utils.output_manager import OutputManager
 
-# Load environment variables
-load_dotenv()
-
-# Load optimized .env file explicitly for correct Qdrant configuration
-optimized_env_path = Path(__file__).parent.parent / "crawlers" / "optimized" / ".env"
-if optimized_env_path.exists():
-    load_dotenv(dotenv_path=optimized_env_path, override=True)
+# Load environment variables from multiple known locations
+load_dotenv()  # current working directory
+package_env = Path(__file__).resolve().parents[1] / ".env"
+load_dotenv(dotenv_path=package_env, override=False)
+project_env = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(dotenv_path=project_env, override=False)
+# Legacy optimized env path
+optimized_env_path = (
+    Path(__file__).resolve().parents[1] / "crawlers" / "optimized" / ".env"
+)
+load_dotenv(dotenv_path=optimized_env_path, override=False)
 
 # Configure Rich logging to match MCP server
 console = Console()
@@ -87,10 +91,10 @@ logger = logging.getLogger(__name__)
 def sanitize_url_for_logging(url: str) -> str:
     """
     Sanitize URL for logging by removing sensitive query parameters and credentials.
-    
+
     Args:
         url: The URL to sanitize
-        
+
     Returns:
         Sanitized URL safe for logging
     """
@@ -98,9 +102,11 @@ def sanitize_url_for_logging(url: str) -> str:
         parsed = urlparse(url)
         # Remove userinfo (username:password) and query parameters that might contain sensitive data
         sanitized = parsed._replace(
-            netloc=parsed.netloc.split('@')[-1] if '@' in parsed.netloc else parsed.netloc,
-            query='',  # Remove all query parameters to be safe
-            fragment=''  # Remove fragment as well
+            netloc=parsed.netloc.split("@")[-1]
+            if "@" in parsed.netloc
+            else parsed.netloc,
+            query="",  # Remove all query parameters to be safe
+            fragment="",  # Remove fragment as well
         )
         return urlunparse(sanitized)
     except Exception:
@@ -155,14 +161,26 @@ class WebhookConfig:
         ]
 
         # Enhanced filtering options (from old script patterns)
-        self.filter_dismissed_reviews = os.getenv("WEBHOOK_FILTER_DISMISSED_REVIEWS", "true").lower() == "true"
-        self.filter_resolved_threads = os.getenv("WEBHOOK_FILTER_RESOLVED_THREADS", "true").lower() == "true"
-        self.filter_stale_code = os.getenv("WEBHOOK_FILTER_STALE_CODE", "true").lower() == "true"
-        self.filter_old_comments = os.getenv("WEBHOOK_FILTER_OLD_COMMENTS", "true").lower() == "true"
-        self.filter_pre_force_push = os.getenv("WEBHOOK_FILTER_PRE_FORCE_PUSH", "true").lower() == "true"
+        self.filter_dismissed_reviews = (
+            os.getenv("WEBHOOK_FILTER_DISMISSED_REVIEWS", "true").lower() == "true"
+        )
+        self.filter_resolved_threads = (
+            os.getenv("WEBHOOK_FILTER_RESOLVED_THREADS", "true").lower() == "true"
+        )
+        self.filter_stale_code = (
+            os.getenv("WEBHOOK_FILTER_STALE_CODE", "true").lower() == "true"
+        )
+        self.filter_old_comments = (
+            os.getenv("WEBHOOK_FILTER_OLD_COMMENTS", "true").lower() == "true"
+        )
+        self.filter_pre_force_push = (
+            os.getenv("WEBHOOK_FILTER_PRE_FORCE_PUSH", "true").lower() == "true"
+        )
         self.max_comment_age_days = int(os.getenv("WEBHOOK_MAX_COMMENT_AGE_DAYS", "30"))
         self.max_update_age_days = int(os.getenv("WEBHOOK_MAX_UPDATE_AGE_DAYS", "7"))
-        self.verbose_filtering = os.getenv("WEBHOOK_VERBOSE_FILTERING", "false").lower() == "true"
+        self.verbose_filtering = (
+            os.getenv("WEBHOOK_VERBOSE_FILTERING", "false").lower() == "true"
+        )
 
         self.validate()
 
@@ -214,8 +232,7 @@ class WebhookProcessor:
         if self.config.enable_pr_embeddings and self.opt_config.enable_embeddings:
             try:
                 self.tei_client = TEIEmbeddingsClient(
-                    base_url=self.opt_config.tei_endpoint,
-                    timeout_s=30.0
+                    base_url=self.opt_config.tei_endpoint, timeout_s=30.0
                 )
                 logger.info(f"Initialized TEI client: {self.opt_config.tei_endpoint}")
             except Exception as e:
@@ -226,9 +243,11 @@ class WebhookProcessor:
                 self.qdrant_client = QdrantClient(
                     base_url=self.opt_config.qdrant_url,
                     api_key=self.opt_config.qdrant_api_key,
-                    timeout_s=30.0
+                    timeout_s=30.0,
                 )
-                logger.info(f"Initialized Qdrant client: {sanitize_url_for_logging(self.opt_config.qdrant_url)}")
+                logger.info(
+                    f"Initialized Qdrant client: {sanitize_url_for_logging(self.opt_config.qdrant_url)}"
+                )
             except Exception as e:
                 logger.warning(f"Failed to initialize Qdrant client: {e}")
 
@@ -280,7 +299,7 @@ class WebhookProcessor:
             return False
 
         # Import here to avoid circular imports
-        from ..crawlers.optimized.utils.content_extractor import (
+        from ..utils.content_extractor import (
             extract_all_content,
             is_content_relevant,
         )
@@ -401,7 +420,7 @@ class WebhookProcessor:
         cmd = [
             sys.executable,
             "-m",
-            "crawler_mcp.crawlers.optimized.cli.pr",
+            "crawler_mcp.cli.pr",
             "pr-list",
             "--owner",
             owner,
@@ -425,15 +444,17 @@ class WebhookProcessor:
                 cmd.extend(["--min-length", str(pr_filters["min_length"])])
 
             # Add enhanced filtering options
-            pr_filters.update({
-                "filter_dismissed_reviews": self.config.filter_dismissed_reviews,
-                "filter_resolved_threads": self.config.filter_resolved_threads,
-                "filter_stale_code": self.config.filter_stale_code,
-                "filter_old_comments": self.config.filter_old_comments,
-                "filter_pre_force_push": self.config.filter_pre_force_push,
-                "max_comment_age_days": self.config.max_comment_age_days,
-                "max_update_age_days": self.config.max_update_age_days,
-            })
+            pr_filters.update(
+                {
+                    "filter_dismissed_reviews": self.config.filter_dismissed_reviews,
+                    "filter_resolved_threads": self.config.filter_resolved_threads,
+                    "filter_stale_code": self.config.filter_stale_code,
+                    "filter_old_comments": self.config.filter_old_comments,
+                    "filter_pre_force_push": self.config.filter_pre_force_push,
+                    "max_comment_age_days": self.config.max_comment_age_days,
+                    "max_update_age_days": self.config.max_update_age_days,
+                }
+            )
 
             # Add filters as JSON argument for the CLI
             cmd.extend(["--filters", json.dumps(pr_filters)])
@@ -483,7 +504,9 @@ class WebhookProcessor:
                     embed_result = await self._embed_pr_items(owner, name, pr_number)
                     logger.info(f"[PR-EMBED] Embedding result: {embed_result}")
                 except Exception as e:
-                    logger.error(f"[PR-EMBED] Failed to embed PR items for {task_id}: {e}")
+                    logger.error(
+                        f"[PR-EMBED] Failed to embed PR items for {task_id}: {e}"
+                    )
         else:
             logger.error(f"PR CLI extraction failed for {task_id}: {stderr.decode()}")
 
@@ -538,7 +561,6 @@ class WebhookProcessor:
                 _md_content = self._generate_markdown_from_items(
                     items, owner, repo, pr_number
                 )
-
 
         except Exception as e:
             logger.warning(
@@ -611,7 +633,9 @@ class WebhookProcessor:
                 logger.error(f"Error in queue worker: {e}")
                 await asyncio.sleep(5)
 
-    async def _embed_pr_items(self, owner: str, repo: str, pr_number: int) -> dict[str, Any]:
+    async def _embed_pr_items(
+        self, owner: str, repo: str, pr_number: int
+    ) -> dict[str, Any]:
         """Generate embeddings for PR items using existing TEI/Qdrant infrastructure."""
 
         # Check if embedding is enabled and clients are available
@@ -619,20 +643,28 @@ class WebhookProcessor:
             return {
                 "status": "skipped",
                 "reason": "embeddings_disabled",
-                "embedded_count": 0
+                "embedded_count": 0,
             }
 
         task_id = f"{repo}#{pr_number}"
         start_time = time.time()
-        logger.info(f"[PR-EMBED] 🚀 Starting embedding for {task_id} using existing infrastructure")
+        logger.info(
+            f"[PR-EMBED] 🚀 Starting embedding for {task_id} using existing infrastructure"
+        )
 
         try:
             # Read items from NDJSON using existing output manager
-            items_path = self.config.output_manager.get_pr_output_paths(owner, repo, pr_number)["items"]
+            items_path = self.config.output_manager.get_pr_output_paths(
+                owner, repo, pr_number
+            )["items"]
 
             if not items_path.exists():
                 logger.warning(f"[PR-EMBED] Items file not found: {items_path}")
-                return {"status": "error", "reason": "items_file_not_found", "embedded_count": 0}
+                return {
+                    "status": "error",
+                    "reason": "items_file_not_found",
+                    "embedded_count": 0,
+                }
 
             # Load items from NDJSON
             items = []
@@ -642,19 +674,24 @@ class WebhookProcessor:
                         items.append(json.loads(line.strip()))
 
             # Filter items that have text content to embed
-            embeddable_items = [
-                item for item in items
-                if item.get("body", "").strip()
-            ]
+            embeddable_items = [item for item in items if item.get("body", "").strip()]
 
             if not embeddable_items:
                 logger.info(f"[PR-EMBED] No embeddable content found for {task_id}")
-                return {"status": "skipped", "reason": "no_content", "embedded_count": 0}
+                return {
+                    "status": "skipped",
+                    "reason": "no_content",
+                    "embedded_count": 0,
+                }
 
-            logger.info(f"[PR-EMBED] Processing {len(embeddable_items)}/{len(items)} items with content")
+            logger.info(
+                f"[PR-EMBED] Processing {len(embeddable_items)}/{len(items)} items with content"
+            )
 
             # Use shared batching utility to avoid TEI payload limits
-            logger.info(f"[PR-EMBED] Generating embeddings via TEI: {self.opt_config.tei_endpoint}")
+            logger.info(
+                f"[PR-EMBED] Generating embeddings via TEI: {self.opt_config.tei_endpoint}"
+            )
 
             # Create batches using existing algorithm from optimized crawler
             batches = pack_items_into_batches(
@@ -662,10 +699,12 @@ class WebhookProcessor:
                 text_extractor=lambda item: item["body"],
                 target_chars=self.opt_config.tei_target_chars_per_batch or 64000,
                 max_items=self.opt_config.tei_max_client_batch_size or 128,
-                parallel_workers=self.opt_config.tei_parallel_requests or 4
+                parallel_workers=self.opt_config.tei_parallel_requests or 4,
             )
 
-            logger.info(f"[PR-EMBED] Processing {len(embeddable_items)} items in {len(batches)} batches")
+            logger.info(
+                f"[PR-EMBED] Processing {len(embeddable_items)} items in {len(batches)} batches"
+            )
 
             # Process batches in parallel using existing patterns
             async with self.tei_client as tei:
@@ -677,7 +716,12 @@ class WebhookProcessor:
                     async with sem:
                         batch_texts = [item["body"] for _, item in batch_items]
                         batch_embeddings = await tei.embed_texts(batch_texts)
-                        return [(item, embedding) for (_, item), embedding in zip(batch_items, batch_embeddings, strict=False)]
+                        return [
+                            (item, embedding)
+                            for (_, item), embedding in zip(
+                                batch_items, batch_embeddings, strict=False
+                            )
+                        ]
 
                 # Launch all batches in parallel
                 for batch in batches:
@@ -690,9 +734,13 @@ class WebhookProcessor:
                     item_embedding_pairs.extend(batch_results)
 
             if len(item_embedding_pairs) != len(embeddable_items):
-                raise ValueError(f"Embedding count mismatch: {len(item_embedding_pairs)} vs {len(embeddable_items)}")
+                raise ValueError(
+                    f"Embedding count mismatch: {len(item_embedding_pairs)} vs {len(embeddable_items)}"
+                )
 
-            logger.info(f"[PR-EMBED] Successfully generated embeddings for all {len(item_embedding_pairs)} items")
+            logger.info(
+                f"[PR-EMBED] Successfully generated embeddings for all {len(item_embedding_pairs)} items"
+            )
 
             # Prepare points for Qdrant using existing client patterns
             points = []
@@ -717,31 +765,29 @@ class WebhookProcessor:
                         "author": item.get("author", ""),
                         "created_at": item.get("created_at", ""),
                         "canonical_url": item.get("canonical_url", ""),
-
                         # Identifiers
                         "original_id": item_identifier,  # Store original string identifier
                         "content_hash": content_hash,
-
                         # Content metadata
                         "body": item["body"],  # Store full text for retrieval
                         "word_count": len(item["body"].split()),
-
                         # File/code context (if available)
                         "file_path": item.get("path", ""),
                         "line_number": item.get("line", ""),
                         "commit_sha": item.get("commit_id", ""),
                         "original_commit_sha": item.get("original_commit_id", ""),
-
                         # Embedding metadata
                         "embedded_at": datetime.now().isoformat(),
                         "embedding_model": self.opt_config.tei_model_name,
-                    }
+                    },
                 }
                 points.append(point)
 
             # Store embeddings using existing Qdrant client (upsert will overwrite by ID)
             collection = self.opt_config.qdrant_collection
-            logger.info(f"[PR-EMBED] Storing {len(points)} vectors in Qdrant collection: {collection}")
+            logger.info(
+                f"[PR-EMBED] Storing {len(points)} vectors in Qdrant collection: {collection}"
+            )
 
             # Upsert vectors (will overwrite existing ones with same IDs)
             async with self.qdrant_client as qdrant:
@@ -751,7 +797,7 @@ class WebhookProcessor:
             logger.info(f"[PR-EMBED] ✅ Successfully embedded {task_id}:")
             logger.info(f"[PR-EMBED]   • Vectors stored: {len(points)}")
             logger.info(f"[PR-EMBED]   • Time taken: {duration:.2f}s")
-            logger.info(f"[PR-EMBED]   • Avg per item: {duration/len(points):.3f}s")
+            logger.info(f"[PR-EMBED]   • Avg per item: {duration / len(points):.3f}s")
 
             return {
                 "status": "success",
@@ -759,17 +805,19 @@ class WebhookProcessor:
                 "total_items": len(items),
                 "task_id": task_id,
                 "duration": duration,
-                "collection": collection
+                "collection": collection,
             }
 
         except Exception as e:
             duration = time.time() - start_time
-            logger.error(f"[PR-EMBED] ❌ Failed to embed {task_id} after {duration:.2f}s: {e}")
+            logger.error(
+                f"[PR-EMBED] ❌ Failed to embed {task_id} after {duration:.2f}s: {e}"
+            )
             return {
                 "status": "error",
                 "reason": str(e),
                 "embedded_count": 0,
-                "task_id": task_id
+                "task_id": task_id,
             }
 
 
@@ -790,11 +838,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 
     # Announce startup with host:port info like MCP server
     logger.info("")
-    logger.info(
-        "[bold green]✨ Webhook server ready on %s:%s[/bold green]",
-        host,
-        port
-    )
+    logger.info("[bold green]✨ Webhook server ready on %s:%s[/bold green]", host, port)
     logger.info("  • PR CLI enabled: %s", config.use_pr_cli)
     logger.info("  • Output directory: %s", config.pr_output_base_dir)
     logger.info("  • Bot patterns: %s", ", ".join(config.bot_patterns))
@@ -1268,7 +1312,7 @@ async def apply_pr_suggestions(
         cmd = [
             sys.executable,
             "-m",
-            "crawler_mcp.crawlers.optimized.cli.pr",
+            "crawler_mcp.cli.pr",
             "pr-apply-suggestions",
             "--owner",
             owner,
@@ -1361,7 +1405,7 @@ async def mark_pr_items_resolved(request: Request) -> JSONResponse:
         cmd = [
             sys.executable,
             "-m",
-            "crawler_mcp.crawlers.optimized.cli.pr",
+            "crawler_mcp.cli.pr",
             "pr-mark-resolved",
             "--owner",
             owner,

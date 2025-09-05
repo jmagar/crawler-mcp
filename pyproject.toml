@@ -70,7 +70,7 @@ dev = [
 ]
 
 [project.scripts]
-crawler-mcp = "crawler_mcp.crawlers.optimized.server:main"
+crawler-mcp = "crawler_mcp.server:main"
 crawler-webhook = "crawler_mcp.webhook.server:main"
 
 [tool.setuptools.packages.find]
@@ -148,7 +148,7 @@ module = [
 ignore_missing_imports = true
 follow_imports = "skip"
 
-# Allow pytest decorators to be untyped in test modules  
+# Allow pytest decorators to be untyped in test modules
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disallow_untyped_decorators = false
@@ -204,12 +204,6 @@ module = [
 ]
 ignore_errors = true
 
-# Re-enable strict checking for optimized crawler package
-[[tool.mypy.overrides]]
-module = [
-    "crawler_mcp.crawlers.optimized.*",
-]
-ignore_errors = true
 
 # Allow missing imports for aiohttp
 [[tool.mypy.overrides]]
@@ -222,7 +216,6 @@ ignore_missing_imports = true
 # Exclude tests and scripts from strict type checking
 [[tool.mypy.overrides]]
 module = [
-    "crawler_mcp.crawlers.optimized.tests.*",
     "crawler_mcp.tests.*",
     "tests.*",
     "scripts.*",
@@ -272,4 +265,3 @@ markers = [
     "requires_services: marks tests that require external services (Qdrant, TEI)",
     "asyncio: marks tests as asyncio tests",
 ]
-

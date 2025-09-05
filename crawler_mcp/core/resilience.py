@@ -77,7 +77,9 @@ class CircuitBreaker:
                 f"Circuit breaker '{self.name}': call() cannot be used in an active event loop; use 'await async_call(...)' instead"
             )
 
-    async def async_call(self, func: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    async def async_call(
+        self, func: Callable[..., Any], *args: Any, **kwargs: Any
+    ) -> Any:
         """Execute async function with circuit breaker protection."""
         self.total_calls += 1
 
@@ -96,7 +98,7 @@ class CircuitBreaker:
             else:
                 # Check if result is awaitable (for functools.partial of async functions)
                 result = func(*args, **kwargs)
-                if hasattr(result, '__await__'):
+                if hasattr(result, "__await__"):
                     result = await result
 
             # Success - update state
