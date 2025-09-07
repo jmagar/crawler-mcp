@@ -70,26 +70,26 @@ References: crawl4ai docs for `arun_many`, async crawler lifecycle, dispatcher u
 
 ## Actionable Recommendations
 
-1) Prefer text‑mode configuration over manual route interception
-- Move resource blocking to crawler strategy settings (Text‑Only mode) when JS is not required. Keep the route handler as a fallback behind a feature flag.
+1. Prefer text‑mode configuration over manual route interception
+   - Move resource blocking to crawler strategy settings (Text‑Only mode) when JS is not required. Keep the route handler as a fallback behind a feature flag.
 
-2) Replace non‑documented run‑config flags with stable ones
-- Migrate `enable_javascript`/`wait_for_js_rendering` usage toward:
-  - `wait_for="css:<selector>"` or `wait_for="js:(...)"` for readiness.
-  - `delay_before_return_html` for a minimal buffer.
-  - Use `js_code` for page interaction (scroll/click) when needed.
+2. Replace non‑documented run‑config flags with stable ones
+   - Migrate `enable_javascript`/`wait_for_js_rendering` usage toward:
+     - `wait_for="css:<selector>"` or `wait_for="js:(...)"` for readiness.
+     - `delay_before_return_html` for a minimal buffer.
+     - Use `js_code` for page interaction (scroll/click) when needed.
 
-3) Make concurrency tuning opt‑in and bounded
-- Keep `ConcurrencyTuner` optional, with config gating, and log when overridden. Limit adjustment frequency and step size; never exceed initial `max_session_permit` unless explicitly allowed by config.
+3. Make concurrency tuning opt‑in and bounded
+   - Keep `ConcurrencyTuner` optional, with config gating, and log when overridden. Limit adjustment frequency and step size; never exceed initial `max_session_permit` unless explicitly allowed by config.
 
-4) Embrace `CrawlerMonitor` when available
-- If feasible, integrate Crawl4AI’s `CrawlerMonitor` for live visibility and expose those metrics alongside our `PerformanceMonitor` report.
+4. Embrace `CrawlerMonitor` when available
+   - If feasible, integrate Crawl4AI's `CrawlerMonitor` for live visibility and expose those metrics alongside our `PerformanceMonitor` report.
 
-5) Harden validation feature flags
-- Allow toggling validation strictness per domain/route (e.g., docs vs apps), and expose `doc_relax_validation_patterns` in config (already present) with clear defaults.
+5. Harden validation feature flags
+   - Allow toggling validation strictness per domain/route (e.g., docs vs apps), and expose `doc_relax_validation_patterns` in config (already present) with clear defaults.
 
-6) Align config cloning to documented stable fields
-- In `_clone_config`, prefer copying only documented fields, and add a safe pathway for `wait_for`/`js_code`. Keep `excluded_tags`, `word_count_threshold`, `page_timeout`, `delay_before_return_html`, `cache_mode`, `exclude_external_links`, `process_iframes`, `remove_overlay_elements`, `only_text`.
+6. Align config cloning to documented stable fields
+   - In `_clone_config`, prefer copying only documented fields, and add a safe pathway for `wait_for`/`js_code`. Keep `excluded_tags`, `word_count_threshold`, `page_timeout`, `delay_before_return_html`, `cache_mode`, `exclude_external_links`, `process_iframes`, `remove_overlay_elements`, `only_text`.
 
 ## Q&A Highlights from crawl4ai Repository
 

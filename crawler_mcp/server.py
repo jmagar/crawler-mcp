@@ -12,11 +12,17 @@ import logging
 import os
 import signal
 import sys
+from datetime import UTC
 from pathlib import Path
 from typing import Any
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
+from fastmcp.middlewares import (
+    ErrorHandlingMiddleware,
+    LoggingMiddleware,
+    TimingMiddleware,
+)
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install
@@ -96,6 +102,11 @@ try:  # Prefer passing a truthy value so ToolManager won't access settings.mask_
 except TypeError:  # Older FastMCP without this kwarg
     mcp = FastMCP("crawler-mcp")
 
+# Add required middlewares
+mcp.add_middleware(ErrorHandlingMiddleware())
+mcp.add_middleware(LoggingMiddleware())
+mcp.add_middleware(TimingMiddleware())
+
 # Register optimized tools for now
 register_github_pr_tools(mcp)
 register_rag_tools(mcp)
@@ -107,6 +118,9 @@ logger.info("Registered FastMCP tools (optimized)")
 @mcp.tool
 async def health_check(ctx: Context, detailed: bool = False) -> dict[str, Any]:
     """Perform a health check of all services."""
+    from datetime import datetime
+    from importlib import metadata as _metadata
+
     check_type = "detailed" if detailed else "lightweight"
     await ctx.info(f"Performing {check_type} health check of all services")
 
@@ -114,8 +128,8 @@ async def health_check(ctx: Context, detailed: bool = False) -> dict[str, Any]:
         health_results: dict[str, Any] = {
             "server": {
                 "status": "healthy",
-                "version": "0.1.0",
-                "timestamp": "2024-01-01T00:00:00Z",
+                "version": _metadata.version("crawler-mcp"),
+                "timestamp": datetime.now(UTC).isoformat(),
             },
             "services": {},
             "configuration": {
@@ -204,7 +218,7 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
             },
             "optimized_config": OptimizedConfig.from_env().to_dict(),
             "env_present": {
-                k: os.environ.get(k)
+                k: True
                 for k in [
                     "TEI_URL",
                     "TEI_MODEL",
@@ -215,12 +229,9 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
                 ]
                 if os.environ.get(k) is not None
             },
-            "optimized_env_present": {
-                k: os.environ.get(k)
-                for k in sorted(
-                    v for v in os.environ if v.startswith("OPTIMIZED_CRAWLER_")
-                )
-            },
+            "optimized_env_present": sorted(
+                k for k in os.environ if k.startswith("OPTIMIZED_CRAWLER_")
+            ),
         }
         return info
     except Exception as e:

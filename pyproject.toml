@@ -239,6 +239,8 @@ ignore_missing_imports = true
 [tool.coverage.run]
 data_file = ".cache/.coverage"
 source = ["crawler_mcp"]
+branch = true
+parallel = true
 omit = [
     "*/tests/*",
     "*/test_*.py",
@@ -251,7 +253,7 @@ exclude_lines = [
     "pragma: no cover",
     "def __repr__",
     "if self.debug:",
-    "if __name__ == .__main__.:",
+    "if __name__ == \"__main__\":",
     "raise NotImplementedError",
     "if TYPE_CHECKING:",
 ]
@@ -265,6 +267,13 @@ directory = ".cache/htmlcov"
 [tool.coverage.xml]
 output = ".cache/coverage.xml"
 
+[tool.coverage.paths]
+source = [
+    "crawler_mcp",
+    "*/workspace/*/crawler_mcp",
+    "*/site-packages/crawler_mcp"
+]
+
 [tool.pytest.ini_options]
 cache_dir = ".cache/pytest"
 minversion = "8.4"
@@ -273,6 +282,11 @@ addopts = [
     "--strict-markers",
     "--tb=short",
     "-ra",
+    "--cov=crawler_mcp",
+    "--cov-branch",
+    "--cov-report=term-missing",
+    "--cov-report=xml:.cache/coverage.xml",
+    "--cov-report=html:.cache/htmlcov",
 ]
 testpaths = ["tests"]
 asyncio_mode = "auto"

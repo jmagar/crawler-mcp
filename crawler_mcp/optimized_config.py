@@ -7,7 +7,7 @@ performance parameters.
 
 import os
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 
 @dataclass
@@ -300,7 +300,7 @@ class OptimizedConfig:
     enable_crawler_monitor: bool = False
     """Enable Crawl4AI's live CrawlerMonitor visualization and metrics"""
 
-    crawler_monitor_mode: str = "AGGREGATED"
+    crawler_monitor_mode: Literal["DETAILED", "AGGREGATED"] = "AGGREGATED"
     """Display mode: 'DETAILED' or 'AGGREGATED'"""
 
     crawler_monitor_max_visible_rows: int = 15

@@ -5,13 +5,14 @@ This module provides factory methods for creating MemoryAdaptiveDispatcher insta
 optimized for different crawling scenarios and hardware configurations.
 """
 
+import inspect
 import logging
 
 from crawl4ai import MemoryAdaptiveDispatcher
 
 try:  # Optional monitor integration
     from crawl4ai import CrawlerMonitor, DisplayMode
-except Exception:  # pragma: no cover
+except ImportError:  # pragma: no cover
     CrawlerMonitor = None  # type: ignore
     DisplayMode = None  # type: ignore
 
@@ -50,11 +51,14 @@ class DispatcherFactory:
         concurrent = max_concurrent or self.config.max_concurrent_crawls
         threshold = memory_threshold or self.config.memory_threshold
 
+        kwargs = {}
+        if self._supports_monitor_kw():
+            kwargs["monitor"] = self._maybe_build_monitor()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=threshold,
             max_session_permit=concurrent,
             check_interval=0.5,
-            monitor=self._maybe_build_monitor(),
+            **kwargs,
         )
 
     def create_aggressive_dispatcher(
@@ -72,12 +76,15 @@ class DispatcherFactory:
         # Use aggressive defaults if not provided
         concurrent = max_concurrent or (self.config.max_concurrent_crawls * 1.5)
 
+        kwargs = {}
+        if self._supports_monitor_kw():
+            kwargs["monitor"] = self._maybe_build_monitor()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=85.0,  # Higher memory usage tolerance
             max_session_permit=int(concurrent),
             check_interval=0.25,  # Very frequent checks
             recovery_threshold_percent=80.0,  # Later recovery
-            monitor=self._maybe_build_monitor(),
+            **kwargs,
         )
 
     def create_conservative_dispatcher(
@@ -96,11 +103,14 @@ class DispatcherFactory:
             1, int(self.config.max_concurrent_crawls * 0.75)
         )
 
+        kwargs = {}
+        if self._supports_monitor_kw():
+            kwargs["monitor"] = self._maybe_build_monitor()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=60.0,  # Lower memory threshold
             max_session_permit=concurrent,
             check_interval=1.0,  # Less frequent checks
-            monitor=self._maybe_build_monitor(),
+            **kwargs,
         )
 
     def create_memory_efficient_dispatcher(
@@ -117,11 +127,14 @@ class DispatcherFactory:
         """
         concurrent = max_concurrent or max(1, self.config.max_concurrent_crawls // 2)
 
+        kwargs = {}
+        if self._supports_monitor_kw():
+            kwargs["monitor"] = self._maybe_build_monitor()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=50.0,  # Very conservative memory usage
             max_session_permit=concurrent,
             check_interval=2.0,  # Infrequent checks to reduce overhead
-            monitor=self._maybe_build_monitor(),
+            **kwargs,
         )
 
     def create_large_scale_dispatcher(
@@ -138,11 +151,14 @@ class DispatcherFactory:
         """
         concurrent = max_concurrent or (self.config.max_concurrent_crawls * 2)
 
+        kwargs = {}
+        if self._supports_monitor_kw():
+            kwargs["monitor"] = self._maybe_build_monitor()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=self.config.memory_threshold,
             max_session_permit=int(concurrent),
             check_interval=0.5,
-            monitor=self._maybe_build_monitor(),
+            **kwargs,
         )
 
     def create_batch_dispatcher(
@@ -160,11 +176,14 @@ class DispatcherFactory:
         """
         threshold = memory_threshold or self.config.memory_threshold
 
+        kwargs = {}
+        if self._supports_monitor_kw():
+            kwargs["monitor"] = self._maybe_build_monitor()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=threshold,
             max_session_permit=batch_size,
             check_interval=1.0,
-            monitor=self._maybe_build_monitor(),
+            **kwargs,
         )
 
     def create_custom_dispatcher(
@@ -181,11 +200,14 @@ class DispatcherFactory:
         Returns:
             MemoryAdaptiveDispatcher with custom settings
         """
+        kwargs = {}
+        if self._supports_monitor_kw():
+            kwargs["monitor"] = self._maybe_build_monitor()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=memory_threshold,
             max_session_permit=max_concurrent,
             check_interval=check_interval,
-            monitor=self._maybe_build_monitor(),
+            **kwargs,
         )
 
     def get_recommended_dispatcher(self) -> MemoryAdaptiveDispatcher:
@@ -209,30 +231,33 @@ class DispatcherFactory:
         Returns:
             MemoryAdaptiveDispatcher with testing-friendly settings
         """
+        kwargs = {}
+        if self._supports_monitor_kw():
+            kwargs["monitor"] = self._maybe_build_monitor()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=75.0,
             max_session_permit=4,  # Small number for testing
             check_interval=1.0,
-            monitor=self._maybe_build_monitor(),
+            **kwargs,
         )
 
-    def _maybe_build_monitor(self):
+    def _supports_monitor_kw(self) -> bool:
+        """Check if MemoryAdaptiveDispatcher supports the monitor keyword."""
+        try:
+            return "monitor" in inspect.signature(MemoryAdaptiveDispatcher).parameters
+        except Exception:
+            return False
+
+    def _maybe_build_monitor(self) -> "CrawlerMonitor | None":
         """Create a CrawlerMonitor if enabled and available."""
         if not getattr(self.config, "enable_crawler_monitor", False):
             return None
         if CrawlerMonitor is None or DisplayMode is None:
             self.logger.debug("CrawlerMonitor not available in this environment")
             return None
-        mode_str = str(
-            getattr(self.config, "crawler_monitor_mode", "AGGREGATED") or "AGGREGATED"
-        ).upper()
-        mode = getattr(DisplayMode, mode_str, getattr(DisplayMode, "AGGREGATED", None))
         try:
-            return CrawlerMonitor(
-                max_visible_rows=int(
-                    getattr(self.config, "crawler_monitor_max_visible_rows", 15) or 15
-                ),
-                display_mode=mode,
-            )
-        except Exception:
+            # Use default constructor, let CrawlerMonitor handle its own defaults
+            return CrawlerMonitor()
+        except Exception as e:
+            self.logger.debug("Failed to build CrawlerMonitor: %s", e)
             return None

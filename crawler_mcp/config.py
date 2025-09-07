@@ -34,7 +34,13 @@ class CrawlerMCPSettings(BaseSettings):
 
     # Uvicorn/ASGI logging toggles (for connection debugging)
     uvicorn_access_log: bool = Field(default=True, alias="UVICORN_ACCESS_LOG")
-    uvicorn_log_level: str = Field(default="info", alias="UVICORN_LOG_LEVEL")
+    uvicorn_log_level: Literal[
+        "critical", "error", "warning", "info", "debug", "trace"
+    ] = Field(
+        default="info",
+        alias="UVICORN_LOG_LEVEL",
+        description="Uvicorn log level (critical, error, warning, info, debug, trace)",
+    )
     request_log: bool = Field(
         default=False,
         alias="REQUEST_LOG",

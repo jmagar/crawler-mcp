@@ -190,16 +190,15 @@ class ContentExtractorFactory:
 
         # If JavaScript-heavy sites are expected, prefer longer delay or caller-provided
         # `wait_for` conditions rather than undocumented flags.
-        try:
-            if self.config.javascript_enabled:
-                from contextlib import suppress
-
-                with suppress(Exception):
-                    rc.delay_before_return_html = max(
-                        3.0, float(rc.delay_before_return_html)
-                    )  # type: ignore[attr-defined]
-        except Exception:
-            pass
+        if getattr(self.config, "javascript_enabled", False) and hasattr(
+            rc, "delay_before_return_html"
+        ):
+            try:
+                cur = float(getattr(rc, "delay_before_return_html", 0.0))
+            except (TypeError, ValueError):
+                cur = 0.0
+            # setattr avoids mypy attr-defined complaints against 3rd-party types
+            rc.delay_before_return_html = max(3.0, cur)
 
         return rc
 

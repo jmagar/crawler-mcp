@@ -1,8 +1,8 @@
 """
 Batch utility functions for optimized text processing.
 
-This module provides reusable text batching algorithms extracted from the
-optimized crawler's strategy.py for efficient text processing.
+This module provides reusable text batching algorithms for efficient text processing
+and batch optimization in crawling operations.
 """
 
 from collections.abc import Callable
@@ -69,6 +69,18 @@ def pack_texts_into_batches(
 
     if cur:
         batches.append(cur)
+
+    # Merge underfilled batches to satisfy min_chars where possible
+    def batch_chars(b: list[tuple[int, str]]) -> int:
+        return sum(len(t) for _, t in b)
+
+    i = 0
+    while i < len(batches) - 1:
+        if batch_chars(batches[i]) < min_chars:
+            batches[i].extend(batches.pop(i + 1))
+            # do not increment i; re-evaluate merged batch
+        else:
+            i += 1
 
     # Ensure at least `parallel_workers` batches when possible to keep workers busy
     # by splitting the largest batches until we reach desired count.

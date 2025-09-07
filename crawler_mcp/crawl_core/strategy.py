@@ -64,7 +64,9 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         self.parallel_engine = ParallelEngine(self.config)
         self.result_converter = ResultConverter(self.config)
         self.monitor = PerformanceMonitor(self.config)
-        self._crawler_monitor = None  # Will be captured from dispatcher if enabled
+        self._crawler_monitor: Any | None = (
+            None  # Will be captured from dispatcher if enabled
+        )
 
         # Internal state
         self._session_active = False
@@ -521,10 +523,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         # Create dispatcher for concurrency management
         dispatcher = self.dispatcher_factory.get_recommended_dispatcher()
         # Capture Crawl4AI CrawlerMonitor if the dispatcher exposes it
-        try:
-            self._crawler_monitor = getattr(dispatcher, "monitor", None)
-        except Exception:
-            self._crawler_monitor = None
+        self._crawler_monitor = getattr(dispatcher, "monitor", None)
 
         self.logger.debug(
             f"Infrastructure setup: {max_concurrent} concurrent sessions, "
@@ -1863,13 +1862,32 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         # Attach CrawlerMonitor info if enabled
         try:
             cm = self._crawler_monitor
-            report["crawler_monitor"] = {
-                "enabled": bool(cm is not None),
-                "display_mode": str(getattr(cm, "display_mode", "")) if cm else None,
-                "max_visible_rows": int(getattr(cm, "max_visible_rows", 0))
-                if cm
-                else None,
-            }
+            if cm is not None:
+                display_mode = getattr(cm, "display_mode", None)
+                if display_mode is not None:
+                    # If it's an Enum, use .name, otherwise convert to string
+                    if hasattr(display_mode, "name"):
+                        display_mode = display_mode.name
+                    else:
+                        display_mode = str(display_mode)
+                else:
+                    display_mode = None
+
+                max_visible_rows = getattr(cm, "max_visible_rows", None)
+                if max_visible_rows is not None:
+                    max_visible_rows = int(max_visible_rows)
+
+                report["crawler_monitor"] = {
+                    "enabled": True,
+                    "display_mode": display_mode,
+                    "max_visible_rows": max_visible_rows,
+                }
+            else:
+                report["crawler_monitor"] = {
+                    "enabled": False,
+                    "display_mode": None,
+                    "max_visible_rows": None,
+                }
         except Exception:
             report["crawler_monitor"] = {"enabled": False}
         return report

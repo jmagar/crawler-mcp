@@ -131,7 +131,9 @@ class ParallelEngine:
                 # Prefer Crawl4AI text_mode/light strategies for resource reduction.
                 # Optional manual route interception is disabled by default and can be
                 # enabled via config.use_manual_route_blocking for legacy behavior.
-                if getattr(self.config, "use_manual_route_blocking", False):
+                if getattr(
+                    self.config, "use_manual_route_blocking", False
+                ) and self._supports_playwright(crawler):
                     await self._enable_resource_blocking(crawler)
 
                 # Start adaptive concurrency tuning if monitor and dispatcher are provided
@@ -267,11 +269,7 @@ class ParallelEngine:
             f"{duration:.1f}s, {pages_per_second:.2f} pages/sec"
         )
 
-        # Store HTTP success info for strategy to use
-        if hasattr(successful_results, "append"):
-            # Add HTTP success metadata to the results list for strategy access
-            successful_results._http_successful_urls = http_successful_urls
-            successful_results._all_requested_urls = urls
+        # Consider returning metadata separately (e.g., alongside results) if needed downstream.
 
         # Optional bounded retry for placeholder/invalid pages
         try:
@@ -314,7 +312,9 @@ class ParallelEngine:
                     recovered: dict[str, CrawlResult] = {}
                     try:
                         async with self._open_crawler(browser_config) as crawler:
-                            if getattr(self.config, "use_manual_route_blocking", False):
+                            if getattr(
+                                self.config, "use_manual_route_blocking", False
+                            ) and self._supports_playwright(crawler):
                                 await self._enable_resource_blocking(crawler)
                             gen = await crawler.arun_many(
                                 urls=urls_to_retry,
@@ -357,7 +357,17 @@ class ParallelEngine:
     def _open_crawler(self, browser_config: BrowserConfig):
         """Return an AsyncWebCrawler context, using HTTP strategy when JS is disabled (if enabled in config)."""
         use_http = bool(getattr(self.config, "use_http_strategy_when_no_js", False))
-        js_enabled = bool(getattr(browser_config, "java_script_enabled", True))
+        js_enabled = bool(
+            getattr(
+                browser_config,
+                "java_script_enabled",
+                getattr(
+                    browser_config,
+                    "enable_javascript",
+                    getattr(browser_config, "javascript_enabled", True),
+                ),
+            )
+        )
         if (
             use_http
             and not js_enabled
@@ -379,8 +389,11 @@ class ParallelEngine:
                 return AsyncWebCrawler(
                     crawler_strategy=AsyncHTTPCrawlerStrategy(browser_config=http_cfg)
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                self.logger.debug(
+                    "HTTP strategy unavailable or failed (%s); falling back to browser crawler",
+                    e,
+                )
         # Default to regular browser strategy
         return AsyncWebCrawler(config=browser_config)
 
@@ -406,7 +419,9 @@ class ParallelEngine:
 
         try:
             async with self._open_crawler(browser_config) as crawler:
-                if getattr(self.config, "use_manual_route_blocking", False):
+                if getattr(
+                    self.config, "use_manual_route_blocking", False
+                ) and self._supports_playwright(crawler):
                     await self._enable_resource_blocking(crawler)
                 gen = await crawler.arun_many(
                     urls=urls, config=batch_config, dispatcher=dispatcher
@@ -461,7 +476,9 @@ class ParallelEngine:
 
         try:
             async with self._open_crawler(browser_config) as crawler:
-                if getattr(self.config, "use_manual_route_blocking", False):
+                if getattr(
+                    self.config, "use_manual_route_blocking", False
+                ) and self._supports_playwright(crawler):
                     await self._enable_resource_blocking(crawler)
                 if monitor is not None and dispatcher is not None:
                     try:
@@ -583,6 +600,25 @@ class ParallelEngine:
             )
 
         return all_results
+
+    def _supports_playwright(self, crawler: Any) -> bool:
+        """Check if the crawler supports Playwright route interception."""
+        # Check for context routing capability
+        for attr in ("context", "_context", "browser_context"):
+            context = getattr(crawler, attr, None)
+            if context and hasattr(context, "route"):
+                return True
+        # Check for page routing capability
+        page = getattr(crawler, "page", None) or getattr(crawler, "_page", None)
+        if page and hasattr(page, "route"):
+            return True
+        # Check for crawler_strategy attribute (indicates browser-based crawler)
+        if hasattr(crawler, "crawler_strategy"):
+            strategy = getattr(crawler, "crawler_strategy", None)
+            # HTTP strategies don't support Playwright
+            if strategy and "HTTP" not in str(type(strategy).__name__):
+                return True
+        return False
 
     async def _enable_resource_blocking(self, crawler: Any) -> None:
         """
@@ -753,9 +789,7 @@ class ParallelEngine:
             markdown_generator=getattr(config, "markdown_generator", None),
             excluded_tags=excluded,
             exclude_external_links=getattr(config, "exclude_external_links", True),
-            cache_mode=getattr(
-                config, "cache_mode", getattr(config, "cache_mode", None)
-            ),
+            cache_mode=getattr(config, "cache_mode", None),
             check_robots_txt=getattr(config, "check_robots_txt", False),
             word_count_threshold=getattr(config, "word_count_threshold", 50),
             page_timeout=getattr(config, "page_timeout", 30000),
