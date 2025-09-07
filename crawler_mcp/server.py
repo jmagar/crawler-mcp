@@ -21,15 +21,15 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install
 
+from crawler_mcp.config import settings
+from crawler_mcp.core import EmbeddingService, RagService, VectorService
+from crawler_mcp.core.logging import get_logger
+from crawler_mcp.optimized_config import OptimizedConfig
+
 # Tool registrations (top-level package)
 from crawler_mcp.tools.crawling import register_crawling_tools
 from crawler_mcp.tools.github_pr_tools import register_github_pr_tools
 from crawler_mcp.tools.rag import register_rag_tools
-
-from .config import settings
-from .core import EmbeddingService, RagService, VectorService
-from .core.logging import get_logger
-from .optimized_config import OptimizedConfig
 
 
 def setup_logging() -> None:
