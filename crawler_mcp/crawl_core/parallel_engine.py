@@ -24,6 +24,37 @@ from crawler_mcp.utils.monitoring import PerformanceMonitor  # for type referenc
 
 from .adaptive_dispatcher import ConcurrencyTuner
 
+# Optional HTTP-only strategy support (available in some crawl4ai versions)
+# If unavailable, these remain None and the engine will fall back to the default strategy.
+AsyncHTTPCrawlerStrategy: Any | None = None
+HTTPCrawlerConfig: Any | None = None
+try:  # best-effort import; keep flexible to avoid hard dependency
+    # These classes may live under different modules depending on crawl4ai version.
+    # We attempt a few likely locations and ignore failures.
+    from crawl4ai.strategies import (  # type: ignore
+        AsyncHTTPCrawlerStrategy as _AsyncHTTPCrawlerStrategy,
+    )
+    from crawl4ai.strategies import (
+        HTTPCrawlerConfig as _HTTPCrawlerConfig,
+    )
+
+    AsyncHTTPCrawlerStrategy = _AsyncHTTPCrawlerStrategy
+    HTTPCrawlerConfig = _HTTPCrawlerConfig
+except Exception:
+    try:
+        from crawl4ai import (  # type: ignore
+            AsyncHTTPCrawlerStrategy as _AsyncHTTPCrawlerStrategy,
+        )
+        from crawl4ai import (
+            HTTPCrawlerConfig as _HTTPCrawlerConfig,
+        )
+
+        AsyncHTTPCrawlerStrategy = _AsyncHTTPCrawlerStrategy
+        HTTPCrawlerConfig = _HTTPCrawlerConfig
+    except Exception:
+        # Leave as None — code below checks for truthiness before using
+        pass
+
 
 @dataclass
 class CrawlStats:
@@ -95,9 +126,13 @@ class ParallelEngine:
         tuner: ConcurrencyTuner | None = None
 
         try:
-            async with AsyncWebCrawler(config=browser_config) as crawler:
+            async with self._open_crawler(browser_config) as crawler:
                 # Best-effort resource blocking via Playwright if available
-                await self._enable_resource_blocking(crawler)
+                # Prefer Crawl4AI text_mode/light strategies for resource reduction.
+                # Optional manual route interception is disabled by default and can be
+                # enabled via config.use_manual_route_blocking for legacy behavior.
+                if getattr(self.config, "use_manual_route_blocking", False):
+                    await self._enable_resource_blocking(crawler)
 
                 # Start adaptive concurrency tuning if monitor and dispatcher are provided
                 if monitor is not None and dispatcher is not None:
@@ -255,22 +290,12 @@ class ParallelEngine:
                 retry_config = self._clone_config(crawler_config)
                 from contextlib import suppress
 
-                with suppress(Exception):
-                    retry_config.enable_javascript = bool(
-                        getattr(self.config, "placeholder_retry_with_js", True)
-                    )
-                with suppress(Exception):
-                    retry_config.wait_for_js_rendering = True
+                # Prefer increased delay and timeout over undocumented JS flags
                 try:
                     cur = float(getattr(retry_config, "delay_before_return_html", 0.5))
                 except Exception:
                     cur = 0.5
-                try:
-                    js_retry = bool(
-                        getattr(retry_config, "wait_for_js_rendering", False)
-                    ) or bool(getattr(retry_config, "enable_javascript", False))
-                except Exception:
-                    js_retry = False
+                js_retry = bool(getattr(self.config, "placeholder_retry_with_js", True))
                 with suppress(Exception):
                     retry_config.delay_before_return_html = (
                         max(3.0, cur) if js_retry else max(1.0, cur)
@@ -288,8 +313,9 @@ class ParallelEngine:
                         break
                     recovered: dict[str, CrawlResult] = {}
                     try:
-                        async with AsyncWebCrawler(config=browser_config) as crawler:
-                            await self._enable_resource_blocking(crawler)
+                        async with self._open_crawler(browser_config) as crawler:
+                            if getattr(self.config, "use_manual_route_blocking", False):
+                                await self._enable_resource_blocking(crawler)
                             gen = await crawler.arun_many(
                                 urls=urls_to_retry,
                                 config=retry_config,
@@ -328,6 +354,36 @@ class ParallelEngine:
 
         return successful_results
 
+    def _open_crawler(self, browser_config: BrowserConfig):
+        """Return an AsyncWebCrawler context, using HTTP strategy when JS is disabled (if enabled in config)."""
+        use_http = bool(getattr(self.config, "use_http_strategy_when_no_js", False))
+        js_enabled = bool(getattr(browser_config, "java_script_enabled", True))
+        if (
+            use_http
+            and not js_enabled
+            and AsyncHTTPCrawlerStrategy
+            and HTTPCrawlerConfig
+        ):
+            try:
+                # Build a minimal HTTP config; reuse UA if present on browser_config
+                headers = {}
+                ua = getattr(browser_config, "user_agent", None)
+                if ua:
+                    headers["User-Agent"] = ua
+                http_cfg = HTTPCrawlerConfig(
+                    method="GET",
+                    headers=headers or None,
+                    follow_redirects=True,
+                    verify_ssl=True,
+                )
+                return AsyncWebCrawler(
+                    crawler_strategy=AsyncHTTPCrawlerStrategy(browser_config=http_cfg)
+                )
+            except Exception:
+                pass
+        # Default to regular browser strategy
+        return AsyncWebCrawler(config=browser_config)
+
     async def crawl_batch_raw(
         self,
         urls: list[str],
@@ -349,8 +405,9 @@ class ParallelEngine:
         batch_config = self._prepare_batch_config(crawler_config)
 
         try:
-            async with AsyncWebCrawler(config=browser_config) as crawler:
-                await self._enable_resource_blocking(crawler)
+            async with self._open_crawler(browser_config) as crawler:
+                if getattr(self.config, "use_manual_route_blocking", False):
+                    await self._enable_resource_blocking(crawler)
                 gen = await crawler.arun_many(
                     urls=urls, config=batch_config, dispatcher=dispatcher
                 )
@@ -403,8 +460,9 @@ class ParallelEngine:
         tuner: ConcurrencyTuner | None = None
 
         try:
-            async with AsyncWebCrawler(config=browser_config) as crawler:
-                await self._enable_resource_blocking(crawler)
+            async with self._open_crawler(browser_config) as crawler:
+                if getattr(self.config, "use_manual_route_blocking", False):
+                    await self._enable_resource_blocking(crawler)
                 if monitor is not None and dispatcher is not None:
                     try:
                         max_conc = int(
@@ -659,12 +717,8 @@ class ParallelEngine:
         except Exception:
             current_delay = 0.5
 
-        try:
-            js_mode = bool(
-                getattr(batch_config, "wait_for_js_rendering", False)
-            ) or bool(getattr(batch_config, "enable_javascript", False))
-        except Exception:
-            js_mode = False
+        # Infer JS mode by policy rather than undocumented flags; caller/browser config governs JS.
+        js_mode = False
 
         from contextlib import suppress
 
@@ -713,8 +767,9 @@ class ParallelEngine:
             "process_iframes",
             "remove_overlay_elements",
             "delay_before_return_html",
-            "enable_javascript",
-            "wait_for_js_rendering",
+            # Crawl4AI-documented readiness/interaction fields
+            "wait_for",
+            "js_code",
         ):
             try:
                 if hasattr(config, name):

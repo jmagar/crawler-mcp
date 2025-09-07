@@ -2,8 +2,7 @@
 Batch utility functions for optimized text processing.
 
 This module provides reusable text batching algorithms extracted from the
-optimized crawler's strategy.py to avoid duplication between the crawler and
-webhook server.
+optimized crawler's strategy.py for efficient text processing.
 """
 
 from collections.abc import Callable
@@ -29,7 +28,7 @@ def pack_texts_into_batches(
     Pack texts into optimal batches using greedy algorithm from strategy.py.
 
     This is a direct extraction of the batching logic from lines 1468-1517 of strategy.py
-    to enable code reuse between the crawler and webhook server.
+    to enable code reuse across the crawler modules.
 
     Args:
         texts: List of text strings to batch

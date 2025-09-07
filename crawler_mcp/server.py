@@ -8,11 +8,9 @@ and uses core RAG/vector services in crawler_mcp.core.
 from __future__ import annotations
 
 import asyncio
-import atexit
 import logging
 import os
 import signal
-import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -92,8 +90,11 @@ except Exception:  # pragma: no cover - if import fails, let FastMCP handle it
 # Set environment flags after imports but before runtime initializations
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
-# FastMCP instance
-mcp: FastMCP = FastMCP("crawler-mcp")
+# FastMCP instance (pass mask_error_details=True to avoid older settings attr lookup)
+try:  # Prefer passing a truthy value so ToolManager won't access settings.mask_error_details
+    mcp: FastMCP = FastMCP("crawler-mcp", mask_error_details=True)  # type: ignore[call-arg]
+except TypeError:  # Older FastMCP without this kwarg
+    mcp = FastMCP("crawler-mcp")
 
 # Register optimized tools for now
 register_github_pr_tools(mcp)
@@ -226,55 +227,12 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
         raise ToolError(f"Failed to get server info: {e!s}") from e
 
 
-# Webhook subprocess management (unchanged)
-webhook_process: subprocess.Popen[bytes] | None = None
-
-
-def cleanup_webhook_server() -> None:
-    global webhook_process
-    if webhook_process and webhook_process.poll() is None:
-        logger.info("Stopping webhook server...")
-        webhook_process.terminate()
-        try:
-            webhook_process.wait(timeout=5)
-        except Exception:
-            logger.warning("Webhook server did not terminate gracefully, killing...")
-            webhook_process.kill()
-            webhook_process.wait()
-        finally:
-            webhook_process = None
-
-
 def _sigterm_handler(signum: int, _frame: Any) -> None:  # pragma: no cover
     logger.info("Received signal %s, shutting down...", signum)
-    cleanup_webhook_server()
     sys.exit(0)
 
 
 signal.signal(signal.SIGTERM, _sigterm_handler)
-atexit.register(cleanup_webhook_server)
-
-
-def start_webhook_server() -> None:
-    """Start the webhook server subprocess if enabled via env."""
-    global webhook_process
-    start_webhook = os.getenv("START_WEBHOOK_SERVER", "true").lower() == "true"
-    if not start_webhook:
-        logger.info("Webhook server startup disabled via START_WEBHOOK_SERVER=false")
-        return
-
-    try:
-        webhook_port = os.getenv("WEBHOOK_PORT", "38080")
-        logger.info("Starting webhook server on port %s", webhook_port)
-        webhook_process = subprocess.Popen(
-            [sys.executable, "-m", "crawler_mcp.webhook.server"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-        )
-        logger.info("Webhook server started with PID %s", webhook_process.pid)
-    except Exception as e:
-        logger.error("Failed to start webhook server: %s", e)
-        webhook_process = None
 
 
 async def startup_checks() -> None:
@@ -292,7 +250,6 @@ def main() -> None:
         console.print("")
 
         asyncio.run(startup_checks())
-        start_webhook_server()
 
         import uvicorn
 
@@ -306,11 +263,9 @@ def main() -> None:
         )
     except KeyboardInterrupt:
         logger.info("Server stopped by user")
-        cleanup_webhook_server()
         sys.exit(0)
     except Exception as e:  # pragma: no cover
         logger.exception("Server failed to start: %s", e)
-        cleanup_webhook_server()
         sys.exit(1)
 
 

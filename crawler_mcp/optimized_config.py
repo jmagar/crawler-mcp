@@ -291,6 +291,25 @@ class OptimizedConfig:
     auto_cleanup: bool = True
     """Enable automatic cleanup when size limits are exceeded"""
 
+    # Route interception (manual) — prefer Crawl4AI text_mode/light strategies.
+    # This is disabled by default to align with upstream patterns.
+    use_manual_route_blocking: bool = False
+    """If true, enable manual Playwright routing to block resources (legacy)."""
+
+    # Live crawling monitor (Crawl4AI CrawlerMonitor)
+    enable_crawler_monitor: bool = False
+    """Enable Crawl4AI's live CrawlerMonitor visualization and metrics"""
+
+    crawler_monitor_mode: str = "AGGREGATED"
+    """Display mode: 'DETAILED' or 'AGGREGATED'"""
+
+    crawler_monitor_max_visible_rows: int = 15
+    """Max rows to display in monitor (terminal UI)"""
+
+    # Prefer HTTP-only strategy when JS is not required
+    use_http_strategy_when_no_js: bool = True
+    """If true, use Crawl4AI's HTTP strategy when JavaScript is disabled."""
+
     @classmethod
     def from_env(cls, prefix: str = "OPTIMIZED_CRAWLER_") -> "OptimizedConfig":
         """
@@ -375,6 +394,12 @@ class OptimizedConfig:
             "placeholder_retry_attempts": "PLACEHOLDER_RETRY_ATTEMPTS",
             "placeholder_retry_with_js": "PLACEHOLDER_RETRY_WITH_JS",
             "placeholder_retry_timeout_ms": "PLACEHOLDER_RETRY_TIMEOUT_MS",
+            # Monitor & strategy preferences
+            "enable_crawler_monitor": "ENABLE_CRAWLER_MONITOR",
+            "crawler_monitor_mode": "CRAWLER_MONITOR_MODE",
+            "crawler_monitor_max_visible_rows": "CRAWLER_MONITOR_MAX_VISIBLE_ROWS",
+            "use_http_strategy_when_no_js": "USE_HTTP_STRATEGY_WHEN_NO_JS",
+            "use_manual_route_blocking": "USE_MANUAL_ROUTE_BLOCKING",
         }
 
         # Load configuration from environment

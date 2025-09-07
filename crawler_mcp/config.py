@@ -32,6 +32,15 @@ class CrawlerMCPSettings(BaseSettings):
     log_to_file: bool = Field(default=False, alias="LOG_TO_FILE")
     pid_file: str = Field(default="logs/crawlerr.pid", alias="PID_FILE")
 
+    # Uvicorn/ASGI logging toggles (for connection debugging)
+    uvicorn_access_log: bool = Field(default=True, alias="UVICORN_ACCESS_LOG")
+    uvicorn_log_level: str = Field(default="info", alias="UVICORN_LOG_LEVEL")
+    request_log: bool = Field(
+        default=False,
+        alias="REQUEST_LOG",
+        description="Log each incoming HTTP/WS request at info level",
+    )
+
     # Qdrant Vector Database
     qdrant_url: str = Field(default="http://localhost:6333", alias="QDRANT_URL")
     qdrant_api_key: str | None = Field(default=None, alias="QDRANT_API_KEY")

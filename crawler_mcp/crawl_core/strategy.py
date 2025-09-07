@@ -64,6 +64,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         self.parallel_engine = ParallelEngine(self.config)
         self.result_converter = ResultConverter(self.config)
         self.monitor = PerformanceMonitor(self.config)
+        self._crawler_monitor = None  # Will be captured from dispatcher if enabled
 
         # Internal state
         self._session_active = False
@@ -308,16 +309,13 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                     from urllib.parse import urljoin, urlparse
 
                     js_needed = bool(getattr(self.config, "fallback_require_js", True))
-                    if js_needed:
-                        fb_browser = self.browser_factory.create_javascript_config()
-                    else:
-                        fb_browser = self.browser_factory.get_recommended_config()
+                    fb_browser = (
+                        self.browser_factory.create_javascript_config()
+                        if js_needed
+                        else self.browser_factory.get_recommended_config()
+                    )
 
                     fb_run_cfg = self.content_extractor.create_crawler_config()
-                    if hasattr(fb_run_cfg, "enable_javascript"):
-                        fb_run_cfg.enable_javascript = True
-                    if hasattr(fb_run_cfg, "wait_for_js_rendering"):
-                        fb_run_cfg.wait_for_js_rendering = True
                     if hasattr(fb_run_cfg, "delay_before_return_html"):
                         # Ensure adequate delay when JS is enabled during fallback expansion
                         try:
@@ -326,12 +324,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                             )
                         except Exception:
                             cur = 0.0
-                        try:
-                            js_mode = bool(
-                                getattr(fb_run_cfg, "wait_for_js_rendering", False)
-                            ) or bool(getattr(fb_run_cfg, "enable_javascript", False))
-                        except Exception:
-                            js_mode = False
+                        js_mode = bool(js_needed)
                         fb_run_cfg.delay_before_return_html = max(
                             3.0 if js_mode else 0.5, cur
                         )
@@ -527,6 +520,11 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
 
         # Create dispatcher for concurrency management
         dispatcher = self.dispatcher_factory.get_recommended_dispatcher()
+        # Capture Crawl4AI CrawlerMonitor if the dispatcher exposes it
+        try:
+            self._crawler_monitor = getattr(dispatcher, "monitor", None)
+        except Exception:
+            self._crawler_monitor = None
 
         self.logger.debug(
             f"Infrastructure setup: {max_concurrent} concurrent sessions, "
@@ -746,8 +744,6 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                     # Use a JS-friendly run config for fallback to handle SPA/docs navigation
                     try:
                         fb_run_cfg = self.content_extractor.create_crawler_config()
-                        if hasattr(fb_run_cfg, "enable_javascript"):
-                            fb_run_cfg.enable_javascript = True
                         if hasattr(fb_run_cfg, "delay_before_return_html"):
                             try:
                                 cur = float(
@@ -755,19 +751,13 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                                 )
                             except Exception:
                                 cur = 0.0
-                            try:
-                                js_mode = bool(
-                                    getattr(fb_run_cfg, "wait_for_js_rendering", False)
-                                ) or bool(
-                                    getattr(fb_run_cfg, "enable_javascript", False)
-                                )
-                            except Exception:
-                                js_mode = False
+                            # Assume JS mode for fallback pass when requested
+                            js_mode = bool(
+                                getattr(self.config, "fallback_require_js", True)
+                            )
                             fb_run_cfg.delay_before_return_html = max(
                                 3.0 if js_mode else 0.5, cur
                             )
-                        if hasattr(fb_run_cfg, "wait_for_js_rendering"):
-                            fb_run_cfg.wait_for_js_rendering = True
                         if hasattr(fb_run_cfg, "process_iframes"):
                             fb_run_cfg.process_iframes = False
                         if hasattr(fb_run_cfg, "only_text"):
@@ -1869,7 +1859,20 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         Returns:
             Dictionary with performance metrics and recommendations
         """
-        return self.monitor.get_performance_report()
+        report = self.monitor.get_performance_report()
+        # Attach CrawlerMonitor info if enabled
+        try:
+            cm = self._crawler_monitor
+            report["crawler_monitor"] = {
+                "enabled": bool(cm is not None),
+                "display_mode": str(getattr(cm, "display_mode", "")) if cm else None,
+                "max_visible_rows": int(getattr(cm, "max_visible_rows", 0))
+                if cm
+                else None,
+            }
+        except Exception:
+            report["crawler_monitor"] = {"enabled": False}
+        return report
 
     def get_last_pages(self) -> list[Any]:
         """Return the PageContent list from the last crawl, if available."""

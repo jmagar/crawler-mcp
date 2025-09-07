@@ -188,20 +188,16 @@ class ContentExtractorFactory:
             verbose=False,  # Disable verbose output for performance
         )
 
-        # Align run config with global JS setting for dynamic docs sites
+        # If JavaScript-heavy sites are expected, prefer longer delay or caller-provided
+        # `wait_for` conditions rather than undocumented flags.
         try:
-            if hasattr(rc, "enable_javascript"):
-                rc.enable_javascript = bool(self.config.javascript_enabled)
             if self.config.javascript_enabled:
-                # Allow more time for hydration and DOM stabilization
-                if hasattr(rc, "wait_for_js_rendering"):
-                    rc.wait_for_js_rendering = True
                 from contextlib import suppress
 
                 with suppress(Exception):
                     rc.delay_before_return_html = max(
                         3.0, float(rc.delay_before_return_html)
-                    )  # type: ignore[attr-defined] - Increased to 3 seconds for JS
+                    )  # type: ignore[attr-defined]
         except Exception:
             pass
 
@@ -234,8 +230,6 @@ class ContentExtractorFactory:
             process_iframes=True,  # Process iframes for completeness
             page_timeout=60000,  # Longer timeout for quality
             delay_before_return_html=2.0,  # More time for content loading
-            enable_javascript=True,  # Enable JS for dynamic content
-            wait_for_js_rendering=True,
             verbose=False,
         )
 
@@ -279,7 +273,6 @@ class ContentExtractorFactory:
             process_iframes=False,
             page_timeout=15000,  # Shorter timeout
             delay_before_return_html=0.1,  # Minimal delay
-            enable_javascript=False,  # Disable JS for speed
             only_text=True,  # Text-only for maximum speed
             verbose=False,
         )

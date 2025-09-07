@@ -49,7 +49,7 @@ dependencies = [
     "torch>=2.8.0",
     "transformers>=4.55.0",
     "sentence-transformers>=5.1.0",
-    # GitHub webhook server dependencies
+    # Web server dependencies
     "fastapi>=0.104.1",
     "uvicorn[standard]>=0.24.0",
 ]
@@ -71,7 +71,6 @@ dev = [
 
 [project.scripts]
 crawler-mcp = "crawler_mcp.server:main"
-crawler-webhook = "crawler_mcp.webhook.server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
