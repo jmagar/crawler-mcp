@@ -14,7 +14,7 @@ import time
 import uuid
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
 from crawl4ai.async_crawler_strategy import AsyncCrawlerStrategy
@@ -34,6 +34,14 @@ from crawler_mcp.optimized_config import OptimizedConfig
 from crawler_mcp.processing.result_converter import ResultConverter
 from crawler_mcp.processing.url_discovery import URLDiscovery
 from crawler_mcp.utils.monitoring import PerformanceMonitor
+
+
+@runtime_checkable
+class CrawlerMonitorProto(Protocol):
+    """Protocol for CrawlerMonitor to avoid Any type annotations."""
+
+    display_mode: object | None
+    max_visible_rows: int | None
 
 
 class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
@@ -64,8 +72,8 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         self.parallel_engine = ParallelEngine(self.config)
         self.result_converter = ResultConverter(self.config)
         self.monitor = PerformanceMonitor(self.config)
-        self._crawler_monitor: Any | None = (
-            None  # Will be captured from dispatcher if enabled
+        self._crawler_monitor: CrawlerMonitorProto | None = (
+            None  # Captured from dispatcher if enabled
         )
 
         # Internal state
@@ -326,9 +334,8 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                             )
                         except Exception:
                             cur = 0.0
-                        js_mode = bool(js_needed)
                         fb_run_cfg.delay_before_return_html = max(
-                            3.0 if js_mode else 0.5, cur
+                            3.0 if js_needed else 0.5, cur
                         )
 
                     # Single fetch
@@ -751,11 +758,13 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                             except Exception:
                                 cur = 0.0
                             # Assume JS mode for fallback pass when requested
-                            js_mode = bool(
-                                getattr(self.config, "fallback_require_js", True)
-                            )
                             fb_run_cfg.delay_before_return_html = max(
-                                3.0 if js_mode else 0.5, cur
+                                3.0
+                                if bool(
+                                    getattr(self.config, "fallback_require_js", True)
+                                )
+                                else 0.5,
+                                cur,
                             )
                         if hasattr(fb_run_cfg, "process_iframes"):
                             fb_run_cfg.process_iframes = False
@@ -1859,37 +1868,17 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
             Dictionary with performance metrics and recommendations
         """
         report = self.monitor.get_performance_report()
-        # Attach CrawlerMonitor info if enabled
-        try:
-            cm = self._crawler_monitor
-            if cm is not None:
-                display_mode = getattr(cm, "display_mode", None)
-                if display_mode is not None:
-                    # If it's an Enum, use .name, otherwise convert to string
-                    if hasattr(display_mode, "name"):
-                        display_mode = display_mode.name
-                    else:
-                        display_mode = str(display_mode)
-                else:
-                    display_mode = None
-
-                max_visible_rows = getattr(cm, "max_visible_rows", None)
-                if max_visible_rows is not None:
-                    max_visible_rows = int(max_visible_rows)
-
-                report["crawler_monitor"] = {
-                    "enabled": True,
-                    "display_mode": display_mode,
-                    "max_visible_rows": max_visible_rows,
-                }
-            else:
-                report["crawler_monitor"] = {
-                    "enabled": False,
-                    "display_mode": None,
-                    "max_visible_rows": None,
-                }
-        except Exception:
-            report["crawler_monitor"] = {"enabled": False}
+        cm = self._crawler_monitor
+        dm = getattr(cm, "display_mode", None) if cm is not None else None
+        display_mode = getattr(dm, "name", str(dm)) if dm is not None else None
+        max_visible_rows = (
+            int(getattr(cm, "max_visible_rows", 0)) if cm is not None else None
+        )
+        report["crawler_monitor"] = {
+            "enabled": cm is not None,
+            "display_mode": display_mode,
+            "max_visible_rows": max_visible_rows,
+        }
         return report
 
     def get_last_pages(self) -> list[Any]:

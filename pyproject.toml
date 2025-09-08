@@ -242,6 +242,7 @@ data_file = ".cache/.coverage"
 source = ["crawler_mcp"]
 branch = true
 parallel = true
+concurrency = ["thread", "multiprocessing"]
 omit = [
     "*/tests/*",
     "*/test_*.py",
@@ -261,6 +262,7 @@ exclude_lines = [
 precision = 2
 skip_covered = false
 show_missing = true
+fail_under = 80
 
 [tool.coverage.html]
 directory = ".cache/htmlcov"
@@ -270,9 +272,9 @@ output = ".cache/coverage.xml"
 
 [tool.coverage.paths]
 source = [
-    "crawler_mcp",
-    "*/workspace/*/crawler_mcp",
-    "*/site-packages/crawler_mcp"
+  "crawler_mcp",
+  "*/workspace/*/crawler_mcp",
+  "*/site-packages/crawler_mcp"
 ]
 
 [tool.pytest.ini_options]
@@ -285,9 +287,6 @@ addopts = [
     "-ra",
     "--cov=crawler_mcp",
     "--cov-branch",
-    "--cov-report=term-missing",
-    "--cov-report=xml:.cache/coverage.xml",
-    "--cov-report=html:.cache/htmlcov",
 ]
 testpaths = ["tests"]
 asyncio_mode = "auto"
@@ -305,6 +304,8 @@ markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "integration: marks tests as integration tests",
     "unit: marks tests as unit tests",
-    "requires_services: marks tests that require external services (Qdrant, TEI)",
+    "requires_qdrant: marks tests that require Qdrant to be running",
+    "requires_tei: marks tests that require TEI to be running",
+    "requires_network: marks tests that require network access",
     "asyncio: marks tests as asyncio tests",
 ]

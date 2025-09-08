@@ -7,7 +7,7 @@
   },
   "environment": {
     "type": "uv",
-    "python": ">=3.11",
+    "python": "==3.11.*",
     "project": ".",
     "editable": ["."]
   },
@@ -15,12 +15,11 @@
     "transport": "http",
     "host": "0.0.0.0",
     "port": 8010,
-    "path": "/mcp/",
+    "path": "/mcp",
     "log_level": "DEBUG",
     "env": {
       "ENV": "development",
-      "DEBUG": "true",
-      "SERVER_PORT": "8010"
+      "DEBUG": "true"
     }
   }
 }

@@ -423,12 +423,31 @@ class OptimizedConfig:
                 elif isinstance(current_value, float):
                     setattr(config, attr_name, float(env_value))
                 else:
-                    setattr(config, attr_name, env_value)
+                    # Special handling for crawler_monitor_mode to normalize case
+                    if attr_name == "crawler_monitor_mode":
+                        normalized_value = env_value.upper()
+                        valid_modes = ["DETAILED", "AGGREGATED"]
+                        if normalized_value not in valid_modes:
+                            raise ValueError(
+                                f"Invalid {env_var}: {env_value!r}. "
+                                f"Must be one of {valid_modes} (case-insensitive)."
+                            )
+                        setattr(config, attr_name, normalized_value)
+                    else:
+                        setattr(config, attr_name, env_value)
 
         # Always ensure these values as requested
         config.check_robots_txt = False
         config.use_rate_limiting = False
         config.respect_crawl_delay = False
+
+        # Validate configuration and fail fast if invalid
+        validation_errors = config.validate()
+        if validation_errors:
+            raise ValueError(
+                "Configuration validation failed:\n"
+                + "\n".join(f"  - {error}" for error in validation_errors)
+            )
 
         return config
 
@@ -534,6 +553,14 @@ class OptimizedConfig:
 
         if not self.excluded_tags:
             errors.append("excluded_tags should not be empty for optimal performance")
+
+        # Validate crawler_monitor_mode
+        valid_monitor_modes = ["DETAILED", "AGGREGATED"]
+        if self.crawler_monitor_mode not in valid_monitor_modes:
+            errors.append(
+                f"crawler_monitor_mode must be one of {valid_monitor_modes}, "
+                f"got: {self.crawler_monitor_mode!r}"
+            )
 
         return errors
 

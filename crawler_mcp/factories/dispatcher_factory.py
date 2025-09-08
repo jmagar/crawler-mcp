@@ -11,10 +11,9 @@ import logging
 from crawl4ai import MemoryAdaptiveDispatcher
 
 try:  # Optional monitor integration
-    from crawl4ai import CrawlerMonitor, DisplayMode
+    from crawl4ai import CrawlerMonitor
 except ImportError:  # pragma: no cover
     CrawlerMonitor = None  # type: ignore
-    DisplayMode = None  # type: ignore
 
 from crawler_mcp.optimized_config import OptimizedConfig
 
@@ -51,9 +50,7 @@ class DispatcherFactory:
         concurrent = max_concurrent or self.config.max_concurrent_crawls
         threshold = memory_threshold or self.config.memory_threshold
 
-        kwargs = {}
-        if self._supports_monitor_kw():
-            kwargs["monitor"] = self._maybe_build_monitor()
+        kwargs = self._monitor_kwargs()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=threshold,
             max_session_permit=concurrent,
@@ -76,9 +73,7 @@ class DispatcherFactory:
         # Use aggressive defaults if not provided
         concurrent = max_concurrent or (self.config.max_concurrent_crawls * 1.5)
 
-        kwargs = {}
-        if self._supports_monitor_kw():
-            kwargs["monitor"] = self._maybe_build_monitor()
+        kwargs = self._monitor_kwargs()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=85.0,  # Higher memory usage tolerance
             max_session_permit=int(concurrent),
@@ -103,9 +98,7 @@ class DispatcherFactory:
             1, int(self.config.max_concurrent_crawls * 0.75)
         )
 
-        kwargs = {}
-        if self._supports_monitor_kw():
-            kwargs["monitor"] = self._maybe_build_monitor()
+        kwargs = self._monitor_kwargs()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=60.0,  # Lower memory threshold
             max_session_permit=concurrent,
@@ -127,9 +120,7 @@ class DispatcherFactory:
         """
         concurrent = max_concurrent or max(1, self.config.max_concurrent_crawls // 2)
 
-        kwargs = {}
-        if self._supports_monitor_kw():
-            kwargs["monitor"] = self._maybe_build_monitor()
+        kwargs = self._monitor_kwargs()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=50.0,  # Very conservative memory usage
             max_session_permit=concurrent,
@@ -151,9 +142,7 @@ class DispatcherFactory:
         """
         concurrent = max_concurrent or (self.config.max_concurrent_crawls * 2)
 
-        kwargs = {}
-        if self._supports_monitor_kw():
-            kwargs["monitor"] = self._maybe_build_monitor()
+        kwargs = self._monitor_kwargs()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=self.config.memory_threshold,
             max_session_permit=int(concurrent),
@@ -176,9 +165,7 @@ class DispatcherFactory:
         """
         threshold = memory_threshold or self.config.memory_threshold
 
-        kwargs = {}
-        if self._supports_monitor_kw():
-            kwargs["monitor"] = self._maybe_build_monitor()
+        kwargs = self._monitor_kwargs()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=threshold,
             max_session_permit=batch_size,
@@ -200,9 +187,7 @@ class DispatcherFactory:
         Returns:
             MemoryAdaptiveDispatcher with custom settings
         """
-        kwargs = {}
-        if self._supports_monitor_kw():
-            kwargs["monitor"] = self._maybe_build_monitor()
+        kwargs = self._monitor_kwargs()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=memory_threshold,
             max_session_permit=max_concurrent,
@@ -231,9 +216,7 @@ class DispatcherFactory:
         Returns:
             MemoryAdaptiveDispatcher with testing-friendly settings
         """
-        kwargs = {}
-        if self._supports_monitor_kw():
-            kwargs["monitor"] = self._maybe_build_monitor()
+        kwargs = self._monitor_kwargs()
         return MemoryAdaptiveDispatcher(
             memory_threshold_percent=75.0,
             max_session_permit=4,  # Small number for testing
@@ -241,18 +224,29 @@ class DispatcherFactory:
             **kwargs,
         )
 
+    def _monitor_kwargs(self) -> dict[str, object]:
+        """Get monitor kwargs if supported and available."""
+        if not self._supports_monitor_kw():
+            return {}
+        monitor = self._maybe_build_monitor()
+        return {"monitor": monitor} if monitor is not None else {}
+
     def _supports_monitor_kw(self) -> bool:
         """Check if MemoryAdaptiveDispatcher supports the monitor keyword."""
         try:
             return "monitor" in inspect.signature(MemoryAdaptiveDispatcher).parameters
-        except Exception:
+        except (ValueError, TypeError) as e:
+            self.logger.debug(
+                "Failed to inspect MemoryAdaptiveDispatcher signature: %s", e
+            )
             return False
 
     def _maybe_build_monitor(self) -> "CrawlerMonitor | None":
         """Create a CrawlerMonitor if enabled and available."""
         if not getattr(self.config, "enable_crawler_monitor", False):
+            self.logger.debug("CrawlerMonitor disabled by config")
             return None
-        if CrawlerMonitor is None or DisplayMode is None:
+        if CrawlerMonitor is None:
             self.logger.debug("CrawlerMonitor not available in this environment")
             return None
         try:

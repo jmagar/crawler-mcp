@@ -25,7 +25,8 @@ from crawler_mcp.utils.monitoring import PerformanceMonitor  # for type referenc
 from .adaptive_dispatcher import ConcurrencyTuner
 
 # Optional HTTP-only strategy support (available in some crawl4ai versions)
-# If unavailable, these remain None and the engine will fall back to the default strategy.
+# If unavailable, these remain None and the engine will fall back to the default
+# strategy.
 AsyncHTTPCrawlerStrategy: Any | None = None
 HTTPCrawlerConfig: Any | None = None
 try:  # best-effort import; keep flexible to avoid hard dependency
@@ -115,7 +116,8 @@ class ParallelEngine:
         successful_results = []
         failed_urls = []
         hash_placeholder_urls = []
-        http_successful_urls = []  # Track URLs that had HTTP success but failed content validation
+        # Track URLs that had HTTP success but failed content validation
+        http_successful_urls = []
 
         self.logger.info(f"Starting parallel crawl of {len(urls)} URLs")
 
@@ -136,7 +138,8 @@ class ParallelEngine:
                 ) and self._supports_playwright(crawler):
                     await self._enable_resource_blocking(crawler)
 
-                # Start adaptive concurrency tuning if monitor and dispatcher are provided
+                # Start adaptive concurrency tuning if monitor and dispatcher are
+                # provided
                 if monitor is not None and dispatcher is not None:
                     try:
                         max_conc = int(
@@ -163,14 +166,16 @@ class ParallelEngine:
                     urls=urls, config=batch_config, dispatcher=dispatcher
                 )
 
-                # Check if we get a list (batch mode) or async generator (streaming mode)
+                # Check if we get a list (batch mode) or async generator
+                # (streaming mode)
                 if hasattr(results_generator, "__aiter__"):
                     # Streaming mode - iterate over async generator
                     async for result in results_generator:
                         results_processed += 1
 
                         if result.success:
-                            # Track HTTP successful URLs regardless of content validation
+                            # Track HTTP successful URLs regardless of content
+                            # validation
                             http_successful_urls.append(result.url)
 
                             # Validate content quality
@@ -197,7 +202,8 @@ class ParallelEngine:
                         else:
                             failed_urls.append(result.url)
                             self.logger.debug(
-                                f"Crawl failed: {result.url} - {getattr(result, 'error', 'Unknown error')}"
+                                f"Crawl failed: {result.url} - "
+                                f"{getattr(result, 'error', 'Unknown error')}"
                             )
 
                         # Log progress periodically
@@ -212,7 +218,8 @@ class ParallelEngine:
                         results_processed += 1
 
                         if result.success:
-                            # Track HTTP successful URLs regardless of content validation
+                            # Track HTTP successful URLs regardless of content
+                            # validation
                             http_successful_urls.append(result.url)
 
                             # Validate content quality
@@ -241,7 +248,8 @@ class ParallelEngine:
                             # result.success is False
                             failed_urls.append(result.url)
                             self.logger.debug(
-                                f"Crawl failed: {result.url} - {getattr(result, 'error', 'Unknown error')}"
+                                f"Crawl failed: {result.url} - "
+                                f"{getattr(result, 'error', 'Unknown error')}"
                             )
 
                         # Log progress periodically
@@ -264,12 +272,14 @@ class ParallelEngine:
 
         self.logger.info(
             f"Parallel crawl completed: {len(successful_results)} successful, "
-            f"{len(failed_urls)} failed, {len(hash_placeholder_urls)} hash placeholders, "
+            f"{len(failed_urls)} failed, "
+            f"{len(hash_placeholder_urls)} hash placeholders, "
             f"{len(http_successful_urls)} HTTP successful, "
             f"{duration:.1f}s, {pages_per_second:.2f} pages/sec"
         )
 
-        # Consider returning metadata separately (e.g., alongside results) if needed downstream.
+        # Consider returning metadata separately (e.g., alongside results) if
+        # needed downstream.
 
         # Optional bounded retry for placeholder/invalid pages
         try:
@@ -281,7 +291,8 @@ class ParallelEngine:
                 urls_to_retry = list(dict.fromkeys(hash_placeholder_urls))
                 attempts = int(getattr(self.config, "placeholder_retry_attempts", 1))
                 self.logger.info(
-                    f"Retrying {len(urls_to_retry)} URLs flagged as placeholders (attempts={attempts})"
+                    f"Retrying {len(urls_to_retry)} URLs flagged as placeholders "
+                    f"(attempts={attempts})"
                 )
 
                 # Build a quality-focused run config for retry
@@ -347,15 +358,17 @@ class ParallelEngine:
 
                 if urls_to_retry:
                     self.logger.info(
-                        f"Dropping {len(urls_to_retry)} pages that remained placeholders after retry"
+                        f"Dropping {len(urls_to_retry)} pages that remained "
+                        f"placeholders after retry"
                     )
         except Exception as e:
             self.logger.debug(f"Retry flow skipped due to error: {e}")
 
         return successful_results
 
-    def _open_crawler(self, browser_config: BrowserConfig):
-        """Return an AsyncWebCrawler context, using HTTP strategy when JS is disabled (if enabled in config)."""
+    def _open_crawler(self, browser_config: BrowserConfig) -> AsyncWebCrawler:
+        """Return an AsyncWebCrawler context, using HTTP strategy when JS is
+        disabled (if enabled in config)."""
         use_http = bool(getattr(self.config, "use_http_strategy_when_no_js", False))
         js_enabled = bool(
             getattr(
@@ -391,7 +404,8 @@ class ParallelEngine:
                 )
             except Exception as e:
                 self.logger.debug(
-                    "HTTP strategy unavailable or failed (%s); falling back to browser crawler",
+                    "HTTP strategy unavailable or failed (%s); falling back to "
+                    "browser crawler",
                     e,
                 )
         # Default to regular browser strategy
@@ -405,7 +419,8 @@ class ParallelEngine:
         dispatcher=None,
     ) -> list[CrawlResult]:
         """
-        Crawl multiple URLs and return raw CrawlResult objects without content validation.
+        Crawl multiple URLs and return raw CrawlResult objects without content
+        validation.
 
         This is useful for discovery passes where link extraction is needed even if
         the page content is minimal.
@@ -589,14 +604,16 @@ class ParallelEngine:
 
             if urls_to_retry and attempt < max_retries:
                 self.logger.info(
-                    f"Retrying {len(urls_to_retry)} failed URLs (attempt {attempt + 2}/{max_retries + 1})"
+                    f"Retrying {len(urls_to_retry)} failed URLs "
+                    f"(attempt {attempt + 2}/{max_retries + 1})"
                 )
                 if retry_delay > 0:
                     await asyncio.sleep(retry_delay)
 
         if urls_to_retry:
             self.logger.warning(
-                f"Failed to crawl {len(urls_to_retry)} URLs after {max_retries + 1} attempts"
+                f"Failed to crawl {len(urls_to_retry)} URLs after "
+                f"{max_retries + 1} attempts"
             )
 
         return all_results
@@ -622,10 +639,13 @@ class ParallelEngine:
 
     async def _enable_resource_blocking(self, crawler: Any) -> None:
         """
-        Best-effort request interception to block heavy resources via Playwright if accessible.
+        Best-effort request interception to block heavy resources via Playwright
+        if accessible.
 
-        Tries to access underlying Page/Context to route requests and abort resource types
-        like images/media/fonts/stylesheet and common ad/analytics URLs. No-op if unsupported.
+        Tries to access underlying Page/Context to route requests and abort
+        resource types
+        like images/media/fonts/stylesheet and common ad/analytics URLs.
+        No-op if unsupported.
         """
         try:
             # Try common attributes for context or page
@@ -716,7 +736,8 @@ class ParallelEngine:
                 all_results.extend(batch_results)
 
                 self.logger.info(
-                    f"Batch {batch_num} completed: {len(batch_results)} successful results"
+                    f"Batch {batch_num} completed: {len(batch_results)} "
+                    f"successful results"
                 )
 
                 # Brief pause between batches to prevent overwhelming the system
@@ -745,7 +766,8 @@ class ParallelEngine:
         batch_config = self._clone_config(crawler_config)
 
         # Optimize for batch processing without breaking JS-rendered pages
-        # Preserve or raise delay when JS rendering is enabled; keep moderate delay otherwise.
+        # Preserve or raise delay when JS rendering is enabled; keep moderate
+        # delay otherwise.
         try:
             current_delay = float(
                 getattr(batch_config, "delay_before_return_html", 0.5)
@@ -753,7 +775,8 @@ class ParallelEngine:
         except Exception:
             current_delay = 0.5
 
-        # Infer JS mode by policy rather than undocumented flags; caller/browser config governs JS.
+        # Infer JS mode by policy rather than undocumented flags; caller/browser
+        # config governs JS.
         js_mode = False
 
         from contextlib import suppress
@@ -870,7 +893,8 @@ class ParallelEngine:
                     if monitor is not None:
                         monitor.record_relaxed_acceptance(reason)
                     self.logger.debug(
-                        f"Relaxed acceptance for {url} due to doc rule (reason={reason})"
+                        f"Relaxed acceptance for {url} due to doc rule "
+                        f"(reason={reason})"
                     )
                     return True
             except Exception:
@@ -919,7 +943,8 @@ class ParallelEngine:
                 content = str(result.extracted_content).strip()
                 if content:
                     self.logger.debug(
-                        f"Using extracted_content fallback for {getattr(result, 'url', 'unknown')}"
+                        f"Using extracted_content fallback for "
+                        f"{getattr(result, 'url', 'unknown')}"
                     )
                     return content
 
@@ -939,7 +964,8 @@ class ParallelEngine:
                 text = re.sub(r"\s+", " ", text).strip()
                 if text and len(text) > 50:  # Minimum threshold for HTML text
                     self.logger.debug(
-                        f"Using HTML text fallback for {getattr(result, 'url', 'unknown')}"
+                        f"Using HTML text fallback for "
+                        f"{getattr(result, 'url', 'unknown')}"
                     )
                     return text
 
@@ -951,13 +977,15 @@ class ParallelEngine:
                         content = content.strip()
                         if content:
                             self.logger.debug(
-                                f"Using {attr} fallback for {getattr(result, 'url', 'unknown')}"
+                                f"Using {attr} fallback for "
+                                f"{getattr(result, 'url', 'unknown')}"
                             )
                             return content
 
         except Exception as e:
             self.logger.debug(
-                f"Content extraction failed for {getattr(result, 'url', 'unknown')}: {e}"
+                f"Content extraction failed for "
+                f"{getattr(result, 'url', 'unknown')}: {e}"
             )
 
         return ""
@@ -1035,7 +1063,8 @@ class ParallelEngine:
                 for word in ["the", "and", "for", "with", "this", "that"]
             )
         ):
-            # Additional check: real hash placeholders usually have no spaces or common words
+            # Additional check: real hash placeholders usually have no spaces or
+            # common words
             return f"hash_like{len(text)}"
 
         # Lines comprised only of many '#' - but allow some markdown

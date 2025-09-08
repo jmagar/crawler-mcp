@@ -138,15 +138,21 @@ async def health_check(ctx: Context, detailed: bool = False) -> dict[str, Any]:
     """Perform a health check of all services."""
     from datetime import datetime
     from importlib import metadata as _metadata
+    from importlib.metadata import PackageNotFoundError
 
     check_type = "detailed" if detailed else "lightweight"
     await ctx.info(f"Performing {check_type} health check of all services")
 
     try:
+        try:
+            version = _metadata.version("crawler-mcp")
+        except PackageNotFoundError:
+            version = "unknown"
+
         health_results: dict[str, Any] = {
             "server": {
                 "status": "healthy",
-                "version": _metadata.version("crawler-mcp"),
+                "version": version,
                 "timestamp": datetime.now(UTC).isoformat(),
             },
             "services": {},
@@ -155,7 +161,7 @@ async def health_check(ctx: Context, detailed: bool = False) -> dict[str, Any]:
                 "vector_database": settings.qdrant_url,
                 "embedding_service": settings.tei_url,
                 "max_concurrent_crawls": settings.max_concurrent_crawls,
-                "chunk_size": 1000,
+                "chunk_size": settings.chunk_size,
                 "vector_dimension": settings.qdrant_vector_size,
             },
         }
@@ -164,7 +170,7 @@ async def health_check(ctx: Context, detailed: bool = False) -> dict[str, Any]:
         # Embedding
         try:
             async with EmbeddingService() as embedding_service:
-                embedding_healthy = await embedding_service._health_check()
+                embedding_healthy = await embedding_service.health_check()
                 info: dict[str, Any] = {
                     "status": "healthy" if embedding_healthy else "unhealthy",
                     "url": settings.tei_url,
@@ -333,9 +339,9 @@ def main() -> None:
             mcp.http_app(),
             host=settings.server_host,
             port=settings.server_port,
-            log_level="info" if settings.debug else "warning",
+            log_level=settings.uvicorn_log_level,
             log_config=None,
-            access_log=False,
+            access_log=settings.uvicorn_access_log,
         )
     except KeyboardInterrupt:
         logger.info("Server stopped by user")

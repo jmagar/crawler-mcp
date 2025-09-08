@@ -25,10 +25,8 @@ def pack_texts_into_batches(
     parallel_workers: int = 4,
 ) -> list[list[tuple[int, str]]]:
     """
-    Pack texts into optimal batches using greedy algorithm from strategy.py.
-
-    This is a direct extraction of the batching logic from lines 1468-1517 of strategy.py
-    to enable code reuse across the crawler modules.
+    Pack texts into optimal batches using a greedy batching algorithm.
+    Extracted and generalized to enable reuse across crawler modules.
 
     Args:
         texts: List of text strings to batch
@@ -76,11 +74,41 @@ def pack_texts_into_batches(
 
     i = 0
     while i < len(batches) - 1:
-        if batch_chars(batches[i]) < min_chars:
-            batches[i].extend(batches.pop(i + 1))
-            # do not increment i; re-evaluate merged batch
-        else:
+        curr = batches[i]
+        nxt = batches[i + 1]
+        curr_chars = batch_chars(curr)
+        if curr_chars >= min_chars:
             i += 1
+            continue
+
+        # Try to steal from next batch without breaking limits
+        while nxt and curr_chars < min_chars:
+            cand_idx, cand_txt = nxt[0]
+            cand_len = len(cand_txt)
+            if (curr_chars + cand_len) <= target_chars and (len(curr) + 1) <= max_items:
+                curr.append(nxt.pop(0))
+                curr_chars += cand_len
+            else:
+                break
+
+        # If still underfilled, merge only if the merged batch remains within limits
+        if curr_chars < min_chars:
+            merged_chars = curr_chars + batch_chars(nxt)
+            merged_items = len(curr) + len(nxt)
+            if merged_chars <= target_chars and merged_items <= max_items:
+                curr.extend(batches.pop(i + 1))
+            else:
+                i += 1
+        # else: stay on same i to re-evaluate
+
+    # Handle a single trailing underfilled batch by merging backward when safe
+    if len(batches) >= 2 and batch_chars(batches[-1]) < min_chars:
+        prev, last = batches[-2], batches[-1]
+        if (
+            batch_chars(prev) + batch_chars(last) <= target_chars
+            and len(prev) + len(last) <= max_items
+        ):
+            prev.extend(batches.pop())
 
     # Ensure at least `parallel_workers` batches when possible to keep workers busy
     # by splitting the largest batches until we reach desired count.

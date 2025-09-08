@@ -10,6 +10,8 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from crawler_mcp.core.exceptions import ConfigurationError
+
 # Constants for error messages
 RERANKER_MODEL_ERROR = "RERANKER_MODEL must be a non-empty string"
 
@@ -735,16 +737,26 @@ class CrawlerMCPSettings(BaseSettings):
 
     @model_validator(mode="after")
     def _validate_oauth(self) -> "CrawlerMCPSettings":
-        """Auto-enable OAuth if Google credentials are provided."""
+        """Auto-enable OAuth if Google credentials are provided and validate configuration."""
         if self.google_client_id and self.google_client_secret:
             self.oauth_enabled = True
             self.oauth_provider = "google"
+
             if not self.google_base_url:
-                # Use server URL as base URL if not specified
-                protocol = "https" if self.production else "http"
-                self.google_base_url = (
-                    f"{protocol}://{self.server_host}:{self.server_port}"
-                )
+                if self.production:
+                    # In production, require explicit base URL configuration
+                    raise ConfigurationError(
+                        "FASTMCP_SERVER_AUTH_GOOGLE_BASE_URL is required when running in production. "
+                        "Auto-derivation of OAuth base URLs can produce incorrect URLs behind "
+                        "proxies/load-balancers. Please set this environment variable to your "
+                        "publicly accessible server URL (e.g., https://your-domain.com)."
+                    )
+                else:
+                    # In development/test, auto-derive base URL as fallback
+                    protocol = "https" if self.production else "http"
+                    self.google_base_url = (
+                        f"{protocol}://{self.server_host}:{self.server_port}"
+                    )
         return self
 
     model_config = SettingsConfigDict(
