@@ -18,11 +18,9 @@ from typing import Any
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
-from fastmcp.middlewares import (
-    ErrorHandlingMiddleware,
-    LoggingMiddleware,
-    TimingMiddleware,
-)
+from fastmcp.server.middleware.error_handling import ErrorHandlingMiddleware
+from fastmcp.server.middleware.logging import LoggingMiddleware
+from fastmcp.server.middleware.timing import TimingMiddleware
 from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install
@@ -96,11 +94,31 @@ except Exception:  # pragma: no cover - if import fails, let FastMCP handle it
 # Set environment flags after imports but before runtime initializations
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
+# Configure OAuth if enabled
+auth_provider = None
+if settings.oauth_enabled and settings.oauth_provider == "google":
+    try:
+        from fastmcp.server.auth.providers.google import GoogleProvider
+
+        auth_provider = GoogleProvider(
+            client_id=settings.google_client_id,
+            client_secret=settings.google_client_secret,
+            base_url=settings.google_base_url,
+            required_scopes=settings.google_scopes_list,
+        )
+        logger.info("Google OAuth enabled with base URL: %s", settings.google_base_url)
+    except Exception as e:
+        logger.error("Failed to initialize Google OAuth: %s", e)
+        logger.warning("Starting server without authentication")
+
 # FastMCP instance (pass mask_error_details=True to avoid older settings attr lookup)
 try:  # Prefer passing a truthy value so ToolManager won't access settings.mask_error_details
-    mcp: FastMCP = FastMCP("crawler-mcp", mask_error_details=True)  # type: ignore[call-arg]
-except TypeError:  # Older FastMCP without this kwarg
-    mcp = FastMCP("crawler-mcp")
+    mcp: FastMCP = FastMCP("crawler-mcp", mask_error_details=True, auth=auth_provider)  # type: ignore[call-arg]
+except TypeError:  # Older FastMCP without this kwarg or auth param
+    try:
+        mcp = FastMCP("crawler-mcp", auth=auth_provider)
+    except TypeError:
+        mcp = FastMCP("crawler-mcp")
 
 # Add required middlewares
 mcp.add_middleware(ErrorHandlingMiddleware())
@@ -216,6 +234,16 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
                 "max_concurrent_crawls": settings.max_concurrent_crawls,
                 "log_level": settings.log_level,
             },
+            "oauth": {
+                "enabled": settings.oauth_enabled,
+                "provider": settings.oauth_provider,
+                "base_url": settings.google_base_url
+                if settings.oauth_enabled
+                else None,
+                "scopes": settings.google_scopes_list
+                if settings.oauth_enabled
+                else None,
+            },
             "optimized_config": OptimizedConfig.from_env().to_dict(),
             "env_present": {
                 k: True
@@ -236,6 +264,43 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
         return info
     except Exception as e:
         raise ToolError(f"Failed to get server info: {e!s}") from e
+
+
+@mcp.tool
+async def get_user_info(ctx: Context) -> dict[str, Any]:
+    """Returns information about the authenticated user (OAuth must be enabled)."""
+    if not settings.oauth_enabled:
+        raise ToolError("OAuth is not enabled on this server")
+
+    try:
+        from fastmcp.server.dependencies import get_access_token
+
+        token = get_access_token()
+        if not token:
+            raise ToolError("No authentication token found")
+
+        # Extract user info from token claims
+        user_info = {
+            "authenticated": True,
+            "provider": settings.oauth_provider,
+        }
+
+        if settings.oauth_provider == "google":
+            user_info.update(
+                {
+                    "google_id": token.claims.get("sub"),
+                    "email": token.claims.get("email"),
+                    "name": token.claims.get("name"),
+                    "picture": token.claims.get("picture"),
+                    "locale": token.claims.get("locale"),
+                }
+            )
+
+        return user_info
+    except ImportError:
+        raise ToolError("Authentication dependencies not available") from None
+    except Exception as e:
+        raise ToolError(f"Failed to get user info: {e!s}") from e
 
 
 def _sigterm_handler(signum: int, _frame: Any) -> None:  # pragma: no cover

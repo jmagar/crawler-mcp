@@ -607,6 +607,25 @@ class CrawlerMCPSettings(BaseSettings):
         description="Maximum file size in MB to process when crawling directories",
     )
 
+    # OAuth Configuration
+    oauth_enabled: bool = Field(default=False, alias="OAUTH_ENABLED")
+    oauth_provider: str | None = Field(default=None, alias="OAUTH_PROVIDER")
+
+    # Google OAuth Settings
+    google_client_id: str | None = Field(
+        default=None, alias="FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_ID"
+    )
+    google_client_secret: str | None = Field(
+        default=None, alias="FASTMCP_SERVER_AUTH_GOOGLE_CLIENT_SECRET"
+    )
+    google_base_url: str | None = Field(
+        default=None, alias="FASTMCP_SERVER_AUTH_GOOGLE_BASE_URL"
+    )
+    google_required_scopes: str = Field(
+        default="openid,email,profile",
+        alias="FASTMCP_SERVER_AUTH_GOOGLE_REQUIRED_SCOPES",
+    )
+
     # CORS & Security
     cors_origins: str = Field(default="*", alias="CORS_ORIGINS")
     cors_credentials: bool = Field(default=True, alias="CORS_CREDENTIALS")
@@ -630,6 +649,15 @@ class CrawlerMCPSettings(BaseSettings):
             return ["*"]
         return [
             origin.strip() for origin in self.cors_origins.split(",") if origin.strip()
+        ]
+
+    @property
+    def google_scopes_list(self) -> list[str]:
+        """Convert google_required_scopes string to list."""
+        return [
+            scope.strip()
+            for scope in self.google_required_scopes.split(",")
+            if scope.strip()
         ]
 
     @field_validator("log_file", mode="before")
@@ -703,6 +731,20 @@ class CrawlerMCPSettings(BaseSettings):
         """Populate crawl_excluded_selectors from property if it's empty."""
         if not self.crawl_excluded_selectors:
             self.crawl_excluded_selectors = self.crawl_excluded_selectors_list
+        return self
+
+    @model_validator(mode="after")
+    def _validate_oauth(self) -> "CrawlerMCPSettings":
+        """Auto-enable OAuth if Google credentials are provided."""
+        if self.google_client_id and self.google_client_secret:
+            self.oauth_enabled = True
+            self.oauth_provider = "google"
+            if not self.google_base_url:
+                # Use server URL as base URL if not specified
+                protocol = "https" if self.production else "http"
+                self.google_base_url = (
+                    f"{protocol}://{self.server_host}:{self.server_port}"
+                )
         return self
 
     model_config = SettingsConfigDict(

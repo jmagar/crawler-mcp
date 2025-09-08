@@ -67,6 +67,7 @@ dev = [
     "pytest-cov>=6.2.1",
     "pytest-rerunfailures>=15.1",
     "pytest-mock>=3.12.0",
+    "inline-snapshot>=0.7.0",
 ]
 
 [project.scripts]
