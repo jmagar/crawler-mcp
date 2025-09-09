@@ -10,7 +10,12 @@ from typing import Literal
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from crawler_mcp.core.exceptions import ConfigurationError
+
+class ConfigurationError(Exception):
+    """Configuration-related error exception."""
+
+    pass
+
 
 # Constants for error messages
 RERANKER_MODEL_ERROR = "RERANKER_MODEL must be a non-empty string"

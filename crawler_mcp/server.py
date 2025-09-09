@@ -104,7 +104,7 @@ if settings.oauth_enabled and settings.oauth_provider == "google":
             client_id=settings.google_client_id,
             client_secret=settings.google_client_secret,
             base_url=settings.google_base_url,
-            required_scopes=settings.google_scopes_list(),
+            required_scopes=settings.google_scopes_list,
         )
         logger.info("Google OAuth enabled with base URL: %s", settings.google_base_url)
     except Exception as e:
@@ -249,7 +249,7 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
                 "base_url": settings.google_base_url
                 if settings.oauth_enabled
                 else None,
-                "scopes": settings.google_scopes_list()
+                "scopes": settings.google_scopes_list
                 if settings.oauth_enabled
                 else None,
             },
