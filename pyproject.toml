@@ -52,6 +52,7 @@ dependencies = [
     # Web server dependencies
     "fastapi>=0.104.1",
     "uvicorn[standard]>=0.24.0",
+    "types-requests>=2.32.4.20250809",
 ]
 
 [project.optional-dependencies]
@@ -308,4 +309,10 @@ markers = [
     "requires_tei: marks tests that require TEI to be running",
     "requires_network: marks tests that require network access",
     "asyncio: marks tests as asyncio tests",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.17.1",
+    "types-requests>=2.32.4.20250809",
 ]
