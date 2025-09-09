@@ -81,15 +81,24 @@ def pack_texts_into_batches(
             i += 1
             continue
 
-        # Try to steal from next batch without breaking limits
-        while nxt and curr_chars < min_chars:
-            cand_idx, cand_txt = nxt[0]
+        # determine in bulk how many items we can steal without violating limits
+        take = 0
+        acc = curr_chars
+        for _cand_idx, cand_txt in nxt:
             cand_len = len(cand_txt)
-            if (curr_chars + cand_len) <= target_chars and (len(curr) + 1) <= max_items:
-                curr.append(nxt.pop(0))
-                curr_chars += cand_len
+            if (
+                acc < min_chars
+                and (acc + cand_len) <= target_chars
+                and (len(curr) + take + 1) <= max_items
+            ):
+                acc += cand_len
+                take += 1
             else:
                 break
+        if take:
+            curr.extend(nxt[:take])
+            del nxt[:take]
+            curr_chars = acc
 
         # If still underfilled, merge only if the merged batch remains within limits
         if curr_chars < min_chars:
@@ -112,13 +121,25 @@ def pack_texts_into_batches(
 
     # Ensure at least `parallel_workers` batches when possible to keep workers busy
     # by splitting the largest batches until we reach desired count.
+    # Only split if both halves meet min_chars constraint
     while len(batches) < parallel_workers and any(len(b) > 1 for b in batches):
         # find largest by chars
         li = max(range(len(batches)), key=lambda i: sum(len(t) for _, t in batches[i]))
         big = batches.pop(li)
         mid = len(big) // 2
-        batches.append(big[:mid])
-        batches.append(big[mid:])
+        left = big[:mid]
+        right = big[mid:]
+
+        # Only split if both halves meet min_chars or constraint is impossible
+        left_chars = batch_chars(left)
+        right_chars = batch_chars(right)
+        if left_chars >= min_chars and right_chars >= min_chars:
+            batches.append(left)
+            batches.append(right)
+        else:
+            # Split would violate min_chars, keep original batch
+            batches.append(big)
+            break
 
     # Fallback if no batches created
     if not batches and texts:

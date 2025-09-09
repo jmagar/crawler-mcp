@@ -14,6 +14,10 @@ try:  # Optional monitor integration
     from crawl4ai import CrawlerMonitor
 except ImportError:  # pragma: no cover
     CrawlerMonitor = None  # type: ignore
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # for type checkers only
+    from crawl4ai import CrawlerMonitor as _CrawlerMonitor
 
 from crawler_mcp.optimized_config import OptimizedConfig
 
@@ -21,7 +25,7 @@ from crawler_mcp.optimized_config import OptimizedConfig
 class DispatcherFactory:
     """Factory for creating optimized MemoryAdaptiveDispatcher instances"""
 
-    def __init__(self, config: OptimizedConfig = None):
+    def __init__(self, config: OptimizedConfig | None = None):
         """
         Initialize dispatcher factory.
 
@@ -30,6 +34,9 @@ class DispatcherFactory:
         """
         self.config = config or OptimizedConfig()
         self.logger = logging.getLogger(__name__)
+
+        # Cache the signature check result for performance
+        self._monitor_support_cached: bool | None = None
 
     def create_performance_dispatcher(
         self,
@@ -233,15 +240,22 @@ class DispatcherFactory:
 
     def _supports_monitor_kw(self) -> bool:
         """Check if MemoryAdaptiveDispatcher supports the monitor keyword."""
+        if self._monitor_support_cached is not None:
+            return self._monitor_support_cached
+
         try:
-            return "monitor" in inspect.signature(MemoryAdaptiveDispatcher).parameters
+            self._monitor_support_cached = (
+                "monitor" in inspect.signature(MemoryAdaptiveDispatcher).parameters
+            )
+            return self._monitor_support_cached
         except (ValueError, TypeError) as e:
             self.logger.debug(
                 "Failed to inspect MemoryAdaptiveDispatcher signature: %s", e
             )
+            self._monitor_support_cached = False
             return False
 
-    def _maybe_build_monitor(self) -> "CrawlerMonitor | None":
+    def _maybe_build_monitor(self) -> "_CrawlerMonitor | None":
         """Create a CrawlerMonitor if enabled and available."""
         if not getattr(self.config, "enable_crawler_monitor", False):
             self.logger.debug("CrawlerMonitor disabled by config")

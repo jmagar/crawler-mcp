@@ -104,12 +104,14 @@ if settings.oauth_enabled and settings.oauth_provider == "google":
             client_id=settings.google_client_id,
             client_secret=settings.google_client_secret,
             base_url=settings.google_base_url,
-            required_scopes=settings.google_scopes_list,
+            required_scopes=settings.google_scopes_list(),
         )
         logger.info("Google OAuth enabled with base URL: %s", settings.google_base_url)
     except Exception as e:
         logger.error("Failed to initialize Google OAuth: %s", e)
-        logger.warning("Starting server without authentication")
+        raise RuntimeError(
+            "OAuth is enabled but GoogleProvider failed to initialize"
+        ) from e
 
 # FastMCP instance (pass mask_error_details=True to avoid older settings attr lookup)
 try:  # Prefer passing a truthy value so ToolManager won't access settings.mask_error_details
@@ -176,7 +178,7 @@ async def health_check(ctx: Context, detailed: bool = False) -> dict[str, Any]:
                     "url": settings.tei_url,
                     "model": settings.tei_model,
                 }
-                if detailed:
+                if detailed and embedding_healthy:
                     info["model_info"] = await embedding_service.get_model_info(
                         max_size=2000
                     )
@@ -222,6 +224,7 @@ async def health_check(ctx: Context, detailed: bool = False) -> dict[str, Any]:
 async def get_server_info(ctx: Context) -> dict[str, Any]:
     """Return effective configuration values to verify environment loading."""
     try:
+        await ctx.info("Gathering server configuration and environment info")
         pkg_root = Path(__file__).parent
         info: dict[str, Any] = {
             "env_files_checked": {
@@ -246,13 +249,13 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
                 "base_url": settings.google_base_url
                 if settings.oauth_enabled
                 else None,
-                "scopes": settings.google_scopes_list
+                "scopes": settings.google_scopes_list()
                 if settings.oauth_enabled
                 else None,
             },
             "optimized_config": OptimizedConfig.from_env().to_dict(),
             "env_present": {
-                k: True
+                k: (os.environ.get(k) is not None)
                 for k in [
                     "TEI_URL",
                     "TEI_MODEL",
@@ -261,7 +264,6 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
                     "QDRANT_API_KEY",
                     "MAX_CONCURRENT_CRAWLS",
                 ]
-                if os.environ.get(k) is not None
             },
             "optimized_env_present": sorted(
                 k for k in os.environ if k.startswith("OPTIMIZED_CRAWLER_")
@@ -285,7 +287,18 @@ async def get_user_info(ctx: Context) -> dict[str, Any]:
         if not token:
             raise ToolError("No authentication token found")
 
-        # Extract user info from token claims
+        # Inform client that we're retrieving user info
+        await ctx.info("Retrieving authenticated user info")
+        token = get_access_token()
+        if not token:
+            raise ToolError("No authentication token found")
+
+        # Extract and validate token claims
+        claims = token.claims
+        if claims is None:
+            raise ToolError("No token claims available")
+
+        # Build base user info
         user_info = {
             "authenticated": True,
             "provider": settings.oauth_provider,
@@ -294,11 +307,11 @@ async def get_user_info(ctx: Context) -> dict[str, Any]:
         if settings.oauth_provider == "google":
             user_info.update(
                 {
-                    "google_id": token.claims.get("sub"),
-                    "email": token.claims.get("email"),
-                    "name": token.claims.get("name"),
-                    "picture": token.claims.get("picture"),
-                    "locale": token.claims.get("locale"),
+                    "google_id": claims.get("sub"),
+                    "email": claims.get("email"),
+                    "name": claims.get("name"),
+                    "picture": claims.get("picture"),
+                    "locale": claims.get("locale"),
                 }
             )
 

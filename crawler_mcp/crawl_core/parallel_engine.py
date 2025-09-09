@@ -668,7 +668,7 @@ class ParallelEngine:
         try:
             rtype = getattr(request, "resource_type", "")
             url = getattr(request, "url", "") or ""
-            if rtype in {"image", "media", "font"} or any(
+            if rtype in {"image", "media", "font", "stylesheet"} or any(
                 bad in url
                 for bad in (
                     "/ads",

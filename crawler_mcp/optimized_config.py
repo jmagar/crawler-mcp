@@ -9,6 +9,9 @@ import os
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+# Valid monitor mode values
+VALID_MONITOR_MODES = ["DETAILED", "AGGREGATED"]
+
 
 @dataclass
 class OptimizedConfig:
@@ -426,7 +429,7 @@ class OptimizedConfig:
                     # Special handling for crawler_monitor_mode to normalize case
                     if attr_name == "crawler_monitor_mode":
                         normalized_value = env_value.upper()
-                        valid_modes = ["DETAILED", "AGGREGATED"]
+                        valid_modes = VALID_MONITOR_MODES
                         if normalized_value not in valid_modes:
                             raise ValueError(
                                 f"Invalid {env_var}: {env_value!r}. "
@@ -555,7 +558,7 @@ class OptimizedConfig:
             errors.append("excluded_tags should not be empty for optimal performance")
 
         # Validate crawler_monitor_mode
-        valid_monitor_modes = ["DETAILED", "AGGREGATED"]
+        valid_monitor_modes = VALID_MONITOR_MODES
         if self.crawler_monitor_mode not in valid_monitor_modes:
             errors.append(
                 f"crawler_monitor_mode must be one of {valid_monitor_modes}, "

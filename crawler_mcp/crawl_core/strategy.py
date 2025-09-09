@@ -14,6 +14,7 @@ import time
 import uuid
 from collections.abc import Callable
 from datetime import datetime
+from enum import Enum
 from typing import Any, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
@@ -40,7 +41,7 @@ from crawler_mcp.utils.monitoring import PerformanceMonitor
 class CrawlerMonitorProto(Protocol):
     """Protocol for CrawlerMonitor to avoid Any type annotations."""
 
-    display_mode: object | None
+    display_mode: str | Enum | None
     max_visible_rows: int | None
 
 
@@ -319,11 +320,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                     from urllib.parse import urljoin, urlparse
 
                     js_needed = bool(getattr(self.config, "fallback_require_js", True))
-                    fb_browser = (
-                        self.browser_factory.create_javascript_config()
-                        if js_needed
-                        else self.browser_factory.get_recommended_config()
-                    )
+                    fb_browser = self._choose_fallback_browser(js_needed)
 
                     fb_run_cfg = self.content_extractor.create_crawler_config()
                     if hasattr(fb_run_cfg, "delay_before_return_html"):
@@ -335,7 +332,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                         except Exception:
                             cur = 0.0
                         fb_run_cfg.delay_before_return_html = max(
-                            3.0 if js_needed else 0.5, cur
+                            self._fallback_delay(js_needed), cur
                         )
 
                     # Single fetch
@@ -445,6 +442,18 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         except Exception as e:
             self.logger.error(f"URL discovery failed for {start_url}: {e}")
             return [start_url]  # Fallback to original URL
+
+    def _choose_fallback_browser(self, js_needed: bool):
+        """Choose appropriate browser configuration for fallback operations."""
+        return (
+            self.browser_factory.create_javascript_config()
+            if js_needed
+            else self.browser_factory.get_recommended_config()
+        )
+
+    def _fallback_delay(self, js_needed: bool) -> float:
+        """Return appropriate delay for fallback operations based on JS requirements."""
+        return 3.0 if js_needed else 0.5
 
     def _calculate_fallback_threshold(self, max_urls: int) -> int:
         """Calculate minimum URLs needed before triggering fallback discovery."""
@@ -741,12 +750,14 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                         f"Fallback link discovery: scheduling {len(to_crawl)} internal links"
                     )
                     # Choose JS-enabled browser if requested, as docs/nav often require it
-                    if (not self.config.javascript_enabled) and bool(
+                    js_needed = (not self.config.javascript_enabled) and bool(
                         getattr(self.config, "fallback_require_js", True)
-                    ):
-                        fb_browser = self.browser_factory.create_javascript_config()
-                    else:
-                        fb_browser = browser_config
+                    )
+                    fb_browser = (
+                        self._choose_fallback_browser(js_needed)
+                        if js_needed
+                        else browser_config
+                    )
                     # Use a JS-friendly run config for fallback to handle SPA/docs navigation
                     try:
                         fb_run_cfg = self.content_extractor.create_crawler_config()
@@ -759,11 +770,13 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                                 cur = 0.0
                             # Assume JS mode for fallback pass when requested
                             fb_run_cfg.delay_before_return_html = max(
-                                3.0
-                                if bool(
-                                    getattr(self.config, "fallback_require_js", True)
-                                )
-                                else 0.5,
+                                self._fallback_delay(
+                                    bool(
+                                        getattr(
+                                            self.config, "fallback_require_js", True
+                                        )
+                                    )
+                                ),
                                 cur,
                             )
                         if hasattr(fb_run_cfg, "process_iframes"):
@@ -1348,12 +1361,12 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
             # Success should be based on whether the crawl attempt succeeded (network-wise)
             # not whether content was successfully extracted/validated
 
-            # Check if any URLs had HTTP success (even if content was filtered)
-            _http_successful_urls = getattr(results, "_http_successful_urls", [])
-
-            # Network success if we reached here without exception OR if any HTTP requests succeeded
-            network_success = True  # Assume network success if we reached processing
-            content_success = len(results) > 0
+            # Consider network success if any individual result succeeded
+            successful_urls = [
+                getattr(r, "url", "") for r in results if getattr(r, "success", False)
+            ]
+            network_success = bool(successful_urls)
+            content_success = bool(crawl_result.pages)
             success = network_success  # Overall success based on network success
 
             # Enhance content based on type detection
@@ -1871,9 +1884,8 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         cm = self._crawler_monitor
         dm = getattr(cm, "display_mode", None) if cm is not None else None
         display_mode = getattr(dm, "name", str(dm)) if dm is not None else None
-        max_visible_rows = (
-            int(getattr(cm, "max_visible_rows", 0)) if cm is not None else None
-        )
+        mvr = getattr(cm, "max_visible_rows", None) if cm is not None else None
+        max_visible_rows = int(mvr) if mvr is not None else None
         report["crawler_monitor"] = {
             "enabled": cm is not None,
             "display_mode": display_mode,
