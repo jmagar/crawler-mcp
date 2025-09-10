@@ -24,7 +24,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from crawler_mcp import CrawlOrchestrator
+from crawler_mcp.crawl_core import CrawlOrchestrator
 from crawler_mcp.optimized_config import OptimizedConfig
 from crawler_mcp.utils.log_manager import LogManager
 from crawler_mcp.utils.output_manager import OutputManager
