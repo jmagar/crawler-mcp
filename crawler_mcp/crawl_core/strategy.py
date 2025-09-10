@@ -1,1608 +1,380 @@
 """
 Main orchestrator for optimized high-performance web crawler.
 
-This module implements the main crawler orchestrator that uses Crawl4AI's public APIs
-to coordinate all components for maximum performance.
+This module implements the main crawler orchestrator that uses Crawl4AI's
+deep crawling APIs to discover and crawl multiple pages efficiently.
 """
 
-import asyncio
 import logging
-import math
-import os
-import re
 import time
-import uuid
-from collections.abc import Callable
 from datetime import datetime
-from enum import Enum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
+from urllib.parse import urlparse
 
-from crawl4ai.models import AsyncCrawlResponse
+from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
+from crawl4ai.deep_crawling.filters import FilterChain, URLPatternFilter
+from crawl4ai.deep_crawling.scorers import KeywordRelevanceScorer
 
-from crawler_mcp.clients.github_client import GitHubClient
 from crawler_mcp.clients.qdrant_http_client import QdrantClient
 from crawler_mcp.clients.tei_client import TEIEmbeddingsClient
 from crawler_mcp.crawl_core.batch_utils import pack_texts_into_batches
-from crawler_mcp.crawl_core.parallel_engine import ParallelEngine
 from crawler_mcp.factories.browser_factory import BrowserFactory
 from crawler_mcp.factories.content_extractor import ContentExtractorFactory
-from crawler_mcp.factories.dispatcher_factory import DispatcherFactory
 from crawler_mcp.models.crawl import PageContent
 from crawler_mcp.models.responses import OptimizedCrawlResponse
 from crawler_mcp.optimized_config import OptimizedConfig
-from crawler_mcp.processing.crawl4ai_discovery import URLDiscoveryAdapter
 from crawler_mcp.processing.result_converter import ResultConverter
 from crawler_mcp.utils.monitoring import PerformanceMonitor
 
 
-@runtime_checkable
-class CrawlerMonitorProto(Protocol):
-    """Protocol for CrawlerMonitor to avoid Any type annotations."""
-
-    display_mode: str | Enum | None
-    max_visible_rows: int | None
-
-
 class CrawlOrchestrator:
     """
-    High-performance web crawler orchestrator using Crawl4AI's public APIs.
+    High-performance web crawler orchestrator using Crawl4AI's deep crawling APIs.
 
-    This orchestrator uses only documented Crawl4AI APIs to provide
-    enhanced performance and features without relying on internal implementations.
+    This orchestrator uses Crawl4AI's documented BFSDeepCrawlStrategy to handle
+    both URL discovery and parallel crawling in a single unified process.
     """
 
     def __init__(self, config: OptimizedConfig = None):
         """
-        Initialize crawler orchestrator.
+        Initialize the crawler orchestrator.
 
         Args:
-            config: Optional configuration (defaults to OptimizedConfig())
+            config: Optional configuration object
         """
-
         self.config = config or OptimizedConfig()
         self.logger = logging.getLogger(__name__)
 
-        # Initialize all components
-        self.url_discovery = URLDiscoveryAdapter(self.config)
+        # Initialize components
         self.browser_factory = BrowserFactory(self.config)
         self.content_extractor = ContentExtractorFactory(self.config)
-        self.dispatcher_factory = DispatcherFactory(self.config)
-        self.parallel_engine = ParallelEngine(self.config)
         self.result_converter = ResultConverter(self.config)
-        self.monitor = PerformanceMonitor(self.config)
-        self._crawler_monitor: CrawlerMonitorProto | None = (
-            None  # Captured from dispatcher if enabled
-        )
+        self.monitor = PerformanceMonitor()
 
-        # Internal state
-        self._session_active = False
-        self._last_pr_report: dict[str, Any] | None = None
-        self._last_pages: list[Any] = []  # Initialize to prevent AttributeError
+        # State management
+        self._last_pages: list[PageContent] = []
+        self._hooks: dict[str, Any] = {}
 
-        self.logger.info(f"Initialized CrawlOrchestrator with config: {self.config}")
+        # Stats
+        self.stats = {
+            "pages_crawled": 0,
+            "pages_failed": 0,
+            "start_time": None,
+            "end_time": None,
+        }
 
-        # Log embeddings and Qdrant configuration with dependency info
-        embeddings_will_run = (
-            self.config.enable_embeddings and self.config.enable_qdrant
-        )
+    async def start(self) -> None:
+        """Initialize the orchestrator."""
+        self.logger.info("CrawlOrchestrator initialized")
 
-        self.logger.info(f"Embeddings configured: {self.config.enable_embeddings}")
-        self.logger.info(f"Qdrant storage configured: {self.config.enable_qdrant}")
+    async def close(self) -> None:
+        """Clean up resources."""
+        self.logger.info("CrawlOrchestrator shut down")
 
-        if embeddings_will_run:
-            self.logger.info("✅ Embeddings will be generated and stored in Qdrant")
-            self.logger.info(f"TEI endpoint: {self.config.tei_endpoint}")
-            self.logger.info(f"Qdrant URL: {self.config.qdrant_url}")
-            self.logger.info(f"Qdrant collection: {self.config.qdrant_collection}")
-        elif self.config.enable_embeddings and not self.config.enable_qdrant:
-            self.logger.warning(
-                "⚠️ Embeddings configured but Qdrant disabled - embeddings will be skipped"
-            )
-        elif not self.config.enable_embeddings:
-            self.logger.info("Embeddings disabled - pages will not be vectorized")
+    def set_hook(self, event: str, callback: Any) -> None:
+        """Set a monitoring hook for events."""
+        self._hooks[event] = callback
 
-        if not embeddings_will_run and self.config.enable_qdrant:
-            self.logger.info(
-                "Qdrant configured but embeddings disabled - no vector storage will occur"
-            )
+    def _trigger_hook(self, event: str, **kwargs: Any) -> None:
+        """Trigger a monitoring hook."""
+        if event in self._hooks:
+            try:
+                self._hooks[event](**kwargs)
+            except Exception as e:
+                self.logger.debug(f"Hook {event} failed: {e}")
 
-    async def crawl(self, url: str, **kwargs) -> OptimizedCrawlResponse:
+    async def crawl(
+        self,
+        start_url: str,
+        max_urls: int | None = None,
+        stream: bool = False,
+        **kwargs: Any,
+    ) -> OptimizedCrawlResponse:
         """
-        Main crawl method using Crawl4AI's public APIs.
-
-        This method implements the complete optimized crawling pipeline:
-        1. URL Discovery using BFSDeepCrawlStrategy
-        2. Parallel crawling with AsyncWebCrawler.arun_many()
-        3. Content validation and conversion
-        4. Performance monitoring
+        Crawl a website using Crawl4AI's deep crawling strategy.
 
         Args:
-            url: Starting URL to crawl from
+            start_url: Starting URL to crawl
+            max_urls: Maximum number of pages to crawl
+            stream: Whether to stream results
             **kwargs: Additional crawling parameters
 
         Returns:
             OptimizedCrawlResponse with crawl results
         """
-        start_time = time.time()
+        self.stats["start_time"] = time.time()
+        max_urls = max_urls or self.config.max_urls_to_discover
 
-        try:
-            self.logger.info(f"Starting optimized crawl from: {url}")
-            self.logger.debug(
-                f"Strategy crawl - max_urls: {kwargs.get('max_urls', self.config.max_urls_to_discover)}"
-            )
+        self.logger.info(f"Starting deep crawl of {start_url} (max: {max_urls} pages)")
 
-            # Parse crawling parameters
-            max_urls = kwargs.get("max_urls", self.config.max_urls_to_discover)
-            max_concurrent = kwargs.get(
-                "max_concurrent", self.config.max_concurrent_crawls
-            )
+        # Create domain-based URL filter
+        domain = urlparse(start_url).netloc
+        self.logger.info(f"Creating URL filter for domain: {domain}")
+        url_filter = URLPatternFilter(
+            patterns=[f"https://{domain}/*", f"http://{domain}/*"]
+        )
 
-            # Special mode: GitHub PR URL -> fetch via GitHub API and synthesize page
-            try:
-                if self._is_github_pr_url(url):
-                    return await self._crawl_github_pr(url, start_time)
-            except Exception as e:
-                self.logger.warning(
-                    f"GitHub PR fast-path failed, falling back to normal crawl: {e}"
-                )
+        # Create relevance scorer with documentation keywords
+        scorer = KeywordRelevanceScorer(
+            keywords=[
+                "documentation",
+                "api",
+                "guide",
+                "tutorial",
+                "docs",
+                "reference",
+                "manual",
+                "help",
+                "getting-started",
+            ],
+            weight=0.7,
+        )
 
-            # Phase 1: URL Discovery
-            self.logger.info("Phase 1: Starting URL discovery")
+        # Create deep crawl strategy
+        self.logger.info(
+            f"Creating BFS strategy: max_depth=3, max_pages={max_urls}, threshold={self.config.url_score_threshold}"
+        )
+        deep_crawl_strategy = BFSDeepCrawlStrategy(
+            max_depth=3,
+            include_external=False,
+            max_pages=max_urls,
+            filter_chain=FilterChain([url_filter]),
+            url_scorer=scorer,
+            score_threshold=0.0,  # Lower threshold to allow more pages
+        )
 
-            # If max_urls is 1, skip discovery and just use the provided URL
-            if max_urls == 1:
-                self.logger.info(
-                    "Single URL mode - skipping discovery, using provided URL"
-                )
-                discovered_urls = [url]
-            else:
-                discovered_urls = await self._discover_urls(url, max_urls)
-
-                if not discovered_urls:
-                    self.logger.warning(
-                        f"No URLs discovered for {url}, using original URL"
-                    )
-                    discovered_urls = [url]
-
-            # Phase 2: Setup crawling infrastructure
-            self.logger.info("Phase 2: Setting up crawling infrastructure")
-            (
-                browser_config,
-                crawler_config,
-                dispatcher,
-            ) = await self._setup_infrastructure(max_concurrent)
-
-            # Phase 3: Start monitoring
-            self.monitor.start_crawl_monitoring(discovered_urls)
-
-            # Phase 4: Parallel crawling
-            self.logger.info(
-                f"Phase 4: Starting parallel crawl of {len(discovered_urls)} URLs"
-            )
-            crawl_results = await self._execute_parallel_crawl(
-                discovered_urls,
-                browser_config,
-                crawler_config,
-                dispatcher,
-                stream=bool(kwargs.get("stream", False)),
-            )
-
-            # Phase 5: Result processing and conversion
-            self.logger.info(
-                f"Phase 5: Processing and converting results - {len(crawl_results)} results"
-            )
-            response = await self._process_results(
-                crawl_results, discovered_urls, start_time, url
-            )
-            self.logger.debug(f"Strategy response success: {response.success}")
-
-            # Phase 6: Finalize monitoring
-            final_metrics = self.monitor.finish_crawl_monitoring()
-
-            # Log final statistics
-            duration = time.time() - start_time
-            self.logger.info(
-                f"Optimized crawl completed: {len(crawl_results)} pages in {duration:.1f}s "
-                f"({final_metrics.pages_per_second:.2f} pages/sec)"
-            )
-
-            return response
-
-        except Exception as e:
-            self.logger.error(f"Optimized crawl failed for {url}: {e}", exc_info=True)
-            self.logger.debug("Exception in strategy crawl, creating error response")
-            # Return minimal response on error
-            return await self._create_error_response(url, str(e))
-
-    async def start(self) -> None:
-        """
-        Initialize crawler resources.
-
-        Sets up URL discovery and other components needed for crawling.
-        """
-        if self._session_active:
-            return
-
-        self.logger.info("Starting optimized crawler strategy")
-
-        try:
-            # Initialize URL discovery session
-            await self.url_discovery.__aenter__()
-
-            self._session_active = True
-            self.logger.info("Optimized crawler strategy started successfully")
-
-        except Exception as e:
-            self.logger.error(f"Failed to start crawler strategy: {e}")
-            raise
-
-    async def close(self) -> None:
-        """
-        Clean up crawler resources.
-
-        Closes URL discovery and other components after crawling.
-        """
-        if not self._session_active:
-            return
-
-        self.logger.info("Closing optimized crawler strategy")
-
-        try:
-            # Close URL discovery session
-            await self.url_discovery.__aexit__(None, None, None)
-
-            self._session_active = False
-            self.logger.info("Optimized crawler strategy closed successfully")
-
-        except Exception as e:
-            self.logger.warning(f"Error during crawler strategy cleanup: {e}")
-
-    def set_hook(self, hook_type: str, hook: Callable) -> None:
-        """
-        Set custom hook for monitoring events.
-
-        Args:
-            hook_type: Type of hook to set
-            hook: Hook function to register
-        """
-        try:
-            self.monitor.register_hook(hook_type, hook)
-            self.logger.debug(f"Registered hook: {hook_type}")
-        except ValueError as e:
-            self.logger.warning(f"Failed to register hook {hook_type}: {e}")
-
-    async def _discover_urls(self, start_url: str, max_urls: int) -> list[str]:
-        """
-        Discover URLs from the starting URL.
-
-        Args:
-            start_url: URL to start discovery from
-            max_urls: Maximum URLs to discover
-
-        Returns:
-            List of discovered URLs
-        """
-        try:
-            # Discover URLs
-            discovered_urls = await self.url_discovery.discover_all(start_url, max_urls)
-
-            self.logger.info(f"Discovered {len(discovered_urls)} URLs from {start_url}")
-
-            # Trigger monitoring hook
-            await self.monitor.trigger_hook(
-                "url_discovered", start_url=start_url, discovered_urls=discovered_urls
-            )
-
-            return discovered_urls
-
-        except Exception as e:
-            self.logger.error(f"URL discovery failed for {start_url}: {e}")
-            return [start_url]  # Fallback to original URL
-
-    async def _setup_infrastructure(self, max_concurrent: int) -> tuple:
-        """
-        Setup crawling infrastructure (browser, config, dispatcher).
-
-        Args:
-            max_concurrent: Maximum concurrent sessions
-
-        Returns:
-            Tuple of (browser_config, crawler_config, dispatcher)
-        """
-        # Create browser configuration
+        # Configure crawler
         browser_config = self.browser_factory.get_recommended_config()
 
-        # Create content extraction configuration
-        markdown_gen = self.content_extractor.create_markdown_generator()
-        crawler_config = self.content_extractor.create_crawler_config(markdown_gen)
+        # Add deep crawl strategy to config
+        crawler_config_dict = {
+            "deep_crawl_strategy": deep_crawl_strategy,
+            "stream": stream,
+            "page_timeout": self.config.page_timeout,
+            "word_count_threshold": self.config.min_word_count,
+            "excluded_tags": ["script", "style", "noscript"],
+        }
 
-        # Create dispatcher for concurrency management
-        dispatcher = self.dispatcher_factory.get_recommended_dispatcher()
-        # Capture Crawl4AI CrawlerMonitor if the dispatcher exposes it
-        self._crawler_monitor = getattr(dispatcher, "monitor", None)
+        # Create config object
+        config = CrawlerRunConfig(**crawler_config_dict)
 
-        self.logger.debug(
-            f"Infrastructure setup: {max_concurrent} concurrent sessions, "
-            f"robots_txt={crawler_config.check_robots_txt}"
-        )
-
-        return browser_config, crawler_config, dispatcher
-
-    async def _execute_parallel_crawl(
-        self,
-        urls: list[str],
-        browser_config,
-        crawler_config,
-        dispatcher,
-        *,
-        stream: bool = False,
-    ) -> list[Any]:
-        """
-        Execute parallel crawling of URLs.
-
-        Args:
-            urls: URLs to crawl
-            browser_config: Browser configuration
-            crawler_config: Crawler configuration
-            dispatcher: Concurrency dispatcher
-
-        Returns:
-            List of successful crawl results
-        """
-
-        # Create progress callback for monitoring
-        def progress_callback(completed: int, total: int, current_url: str):
-            if completed % 10 == 0:  # Log every 10 pages
-                self.logger.info(f"Progress: {completed}/{total} pages completed")
-
-        # Execute parallel crawl with memory pressure handling
+        # Execute crawl
         try:
-            if stream:
-                # Stream results and accumulate
-                results = []
-                async for r in self.parallel_engine.crawl_streaming(
-                    urls,
-                    browser_config,
-                    crawler_config,
-                    dispatcher,
-                    monitor=self.monitor,
-                    result_callback=None,
-                ):
-                    results.append(r)
-            elif self.config.use_aggressive_mode:
-                # Use standard crawling for aggressive mode
-                results = await self.parallel_engine.crawl_batch(
-                    urls,
-                    browser_config,
-                    crawler_config,
-                    dispatcher,
-                    monitor=self.monitor,
-                )
-            else:
-                # Standard parallel crawl
-                results = await self.parallel_engine.crawl_batch(
-                    urls,
-                    browser_config,
-                    crawler_config,
-                    dispatcher,
-                    monitor=self.monitor,
-                    progress_callback=progress_callback,
-                )
-        except Exception as e:
-            # Handle memory pressure or dispatcher exceptions
-            self.logger.warning(f"Memory pressure handling kicked in during crawl: {e}")
-            # Memory pressure - return empty results
-            self.logger.error("Memory pressure too high, skipping crawl")
-            results = []
+            self.logger.info("Executing deep crawl with BFSDeepCrawlStrategy")
 
-        # JS retry logic removed - using browser_mode configuration instead
-
-        # Record results in monitoring
-        for result in results:
-            if hasattr(result, "success") and result.success:
-                content_text = self.result_converter._extract_markdown_content(result)
-                content_length = len(content_text)
-                crawl_time = getattr(result, "crawl_time", 0.0)
-                self.monitor.record_page_success(result.url, content_length, crawl_time)
-                # Record a simple quality score based on content length (0..1)
-                try:
-                    quality_score = min(1.0, max(0.0, content_length / 5000.0))
-                    is_dup = self.monitor.record_content_hash(result.url, content_text)
-                    if is_dup:
-                        # also increment duplicate metric (record_content_validation adds when flagged)
-                        pass
-                    self.monitor.record_content_validation(
-                        result.url, quality_score, is_duplicate=is_dup
-                    )
-                except Exception:
-                    pass
-            else:
-                error_msg = getattr(result, "error", "Unknown error")
-                self.monitor.record_page_failure(result.url, str(error_msg))
-
-        # Also mark URLs that did not return a successful result as failures
-        try:
-            successful_urls = {
-                getattr(r, "url", "") for r in results if getattr(r, "success", False)
-            }
-            remaining_failures = [u for u in urls if u not in successful_urls]
-            for u in remaining_failures:
-                self.monitor.record_page_failure(u, "failed_after_retries")
-        except Exception:
-            pass
-
-        # Fallback logic removed - rely on BFSDeepCrawlStrategy for comprehensive discovery
-
-        # Follow internal links BFS pass (bounded), useful when sitemaps are minimal
-        try:
-            if getattr(self.config, "follow_internal_links", True):
-                from urllib.parse import urljoin, urlparse
-
-                base_hosts = {urlparse(u).netloc for u in urls}
-                # Harvest internal links from successful pages
-                link_set: list[str] = []
-                seen: set[str] = set(urls)
-                budget = max(
-                    0, int(getattr(self.config, "follow_internal_budget", 200))
-                )
-                allowed_locales = [
-                    s.lower()
-                    for s in (getattr(self.config, "allowed_locales", []) or [])
-                ]
-
-                def _ok_locale(abs_url: str) -> bool:
-                    if not allowed_locales:
-                        return True
-                    try:
-                        p = urlparse(abs_url)
-                        segs = [s for s in p.path.split("/") if s]
-                        loc = segs[0].lower() if segs else ""
-                        if not loc:
-                            return ("" in allowed_locales) or ("en" in allowed_locales)
-                        return (loc in allowed_locales) or any(
-                            a and (loc == a or loc.startswith(a + "-"))
-                            for a in allowed_locales
+            async with AsyncWebCrawler(config=browser_config) as crawler:
+                if stream:
+                    # Stream mode - process results as they arrive
+                    crawl_results = []
+                    async for result in await crawler.arun(start_url, config=config):
+                        crawl_results.append(result)
+                        self._trigger_hook(
+                            "page_crawled",
+                            url=result.url,
+                            content_length=len(result.markdown or ""),
+                            crawl_time=0.0,
                         )
-                    except Exception:
-                        return True
+                        self.stats["pages_crawled"] += 1
+                else:
+                    # Non-stream mode - get all results at once
+                    crawl_results = await crawler.arun(start_url, config=config)
+                    if not isinstance(crawl_results, list):
+                        crawl_results = [crawl_results]
 
-                def _norm(u: str) -> str:
-                    try:
-                        pu = urlparse(u)
-                        path = pu.path or "/"
-                        if not path.endswith("/") and "." not in (
-                            path.split("/")[-1] or ""
-                        ):
-                            path = path + "/"
-                        return urljoin(f"{pu.scheme}://{pu.netloc}", path)
-                    except Exception:
-                        return u
-
-                for r in results:
-                    if getattr(r, "success", False):
-                        try:
-                            # Prefer converter to extract robust link lists
-                            try:
-                                candidates = self.result_converter._extract_links(r)  # type: ignore[arg-type]
-                            except Exception:
-                                links = getattr(r, "links", None)
-                                candidates = []
-                                if isinstance(links, dict):
-                                    candidates = list(links.get("internal", []) or [])
-                                elif isinstance(links, list):
-                                    candidates = links[:]
-                            # host not needed directly; base_hosts already computed
-                            for lk in candidates:
-                                try:
-                                    pu = urlparse(lk)
-                                    absu = (
-                                        lk
-                                        if pu.netloc
-                                        else urljoin(getattr(r, "url", ""), lk)
-                                    )
-                                    if urlparse(absu).netloc in base_hosts:
-                                        nu = _norm(absu)
-                                        if _ok_locale(nu) and nu not in seen:
-                                            seen.add(nu)
-                                            link_set.append(nu)
-                                            if len(link_set) >= budget:
-                                                break
-                                except Exception:
-                                    continue
-                            if len(link_set) >= budget:
-                                break
-                        except Exception:
-                            continue
-                if link_set:
-                    self.logger.info(
-                        f"Follow-internal pass: scheduling {len(link_set)} internal links"
+                    self.stats["pages_crawled"] = len(
+                        [r for r in crawl_results if r.success]
                     )
-                    fb_browser = browser_config
-                    fb_results = await self.parallel_engine.crawl_batch(
-                        link_set,
-                        fb_browser,
-                        crawler_config,
-                        dispatcher,
-                        monitor=self.monitor,
-                        progress_callback=progress_callback,
+                    self.stats["pages_failed"] = len(
+                        [r for r in crawl_results if not r.success]
                     )
-                    results.extend(fb_results)
-        except Exception as e:
-            self.logger.debug(f"Follow-internal pass skipped due to error: {e}")
 
-        return results
+            self.logger.info(f"Deep crawl completed: {len(crawl_results)} pages")
 
-    def _is_github_pr_url(self, url: str) -> bool:
-        try:
-            return bool(
-                re.match(r"^https://github\.com/[^/]+/[^/]+/pull/\d+(?:/.*)?$", url)
-            )
-        except Exception:
-            return False
+            # Convert results to our page format
+            pages = []
+            for result in crawl_results:
+                if result.success:
+                    page = self.result_converter.crawl4ai_to_page_content(result)
+                    pages.append(page)
+                else:
+                    self._trigger_hook(
+                        "page_failed",
+                        url=result.url,
+                        error=result.error_message,
+                        error_type="crawl_failed",
+                    )
 
-    def _parse_github_pr_parts(self, url: str) -> tuple[str, str, int]:
-        m = re.match(r"^https://github\.com/([^/]+)/([^/]+)/pull/(\d+)", url)
-        if not m:
-            raise ValueError("Not a GitHub PR URL")
-        owner, repo, num = m.group(1), m.group(2), int(m.group(3))
-        return owner, repo, num
-
-    async def _crawl_github_pr(self, url: str, start_time: float) -> AsyncCrawlResponse:
-        owner, repo, number = self._parse_github_pr_parts(url)
-        token = os.getenv("GITHUB_TOKEN", "")
-        if not token:
-            self.logger.warning(
-                "GITHUB_TOKEN not set; GitHub API may rate-limit or fail"
-            )
-
-        pr: dict[str, Any]
-        reviews: list[dict[str, Any]]
-        rcomments: list[dict[str, Any]]
-        icomments: list[dict[str, Any]]
-
-        async with GitHubClient(token=token, timeout_s=20.0) as gh:
-            pr = await gh.get_pull_request(owner, repo, number)
-            # Reviews and comments (paginated)
-            reviews = await gh.list_reviews(owner, repo, number)
-            rcomments = await gh.list_review_comments(owner, repo, number)
-            icomments = await gh.list_issue_comments(owner, repo, number)
-            try:
-                files = await gh.list_pull_files(owner, repo, number)
-            except Exception:
-                files = []
-
-        title = pr.get("title", f"PR #{number}")
-        state = pr.get("state", "")
-        merged = bool(pr.get("merged", False))
-        author = (pr.get("user", {}) or {}).get("login", "")
-        created_at = pr.get("created_at", "")
-        updated_at = pr.get("updated_at", "")
-        body = pr.get("body", "") or ""
-
-        # Build per-item pages for granular embeddings
-        pages: list[PageContent] = []
-
-        # PR overview page
-        overview_lines: list[str] = []
-        overview_lines.append(f"# {title} (#{number})")
-        overview_lines.append(f"Repository: {owner}/{repo}")
-        overview_lines.append(f"Author: {author}")
-        overview_lines.append(f"State: {'merged' if merged else state}")
-        if created_at:
-            overview_lines.append(f"Created: {created_at}")
-        if updated_at:
-            overview_lines.append(f"Updated: {updated_at}")
-        overview_lines.append("")
-        if body:
-            overview_lines.append("## PR Description")
-            overview_lines.append(body)
-            overview_lines.append("")
-        overview_md = "\n".join(overview_lines).strip()
-        pages.append(
-            PageContent(
-                url=url,
-                title=f"PR #{number}: {title}",
-                content=overview_md,
-                markdown=overview_md,
-                html="",
-                links=[],
-                images=[],
-                metadata={
-                    "source": "github_pr",
-                    "item_type": "pr_overview",
-                    "owner": owner,
-                    "repo": repo,
-                    "pr_number": number,
-                    "pr_state": state,
-                    "pr_merged": merged,
-                    "author": author,
-                    "reviews_count": len(reviews),
-                    "review_comments_count": len(rcomments),
-                    "issue_comments_count": len(icomments),
-                },
-            )
-        )
-
-        # Review items
-        for rv in reviews:
-            reviewer = (rv.get("user", {}) or {}).get("login", "")
-            r_state = rv.get("state", "")
-            submitted = rv.get("submitted_at", rv.get("commit_id", ""))
-            r_body = rv.get("body", "") or ""
-            review_id = rv.get("id")
-            review_url = (
-                rv.get("html_url") or f"{url}#pullrequestreview-{review_id}"
-                if review_id
-                else url
-            )
-
-            lines_r: list[str] = []
-            lines_r.append(f"## Review by {reviewer} - {r_state}")
-            if submitted:
-                lines_r.append(f"Submitted: {submitted}")
-            lines_r.append("")
-            if r_body:
-                lines_r.append(r_body)
-            md_r = "\n".join(lines_r).strip()
-            pages.append(
-                PageContent(
-                    url=review_url,
-                    title=f"PR #{number} Review: {reviewer} - {r_state}",
-                    content=md_r,
-                    markdown=md_r,
-                    html="",
-                    links=[],
-                    images=[],
-                    metadata={
-                        "source": "github_pr",
-                        "item_type": "pr_review",
-                        "owner": owner,
-                        "repo": repo,
-                        "pr_number": number,
-                        "author": reviewer,
-                        "review_id": review_id,
-                        "review_state": r_state,
-                        "submitted_at": submitted,
-                    },
-                )
-            )
-
-        # Review comments (code)
-        for c in rcomments:
-            c_user = (c.get("user", {}) or {}).get("login", "")
-            path = c.get("path", "")
-            line_no = c.get("line") or c.get("original_line") or ""
-            start_line = c.get("start_line") or c.get("original_start_line") or None
-            end_line = c.get("end_line") or c.get("original_end_line") or None
-            created = c.get("created_at", "")
-            body_c = c.get("body", "") or ""
-            comment_id = c.get("id")
-            comment_url = c.get("html_url") or (
-                f"{url}#discussion_r{comment_id}" if comment_id else url
-            )
-
-            lines_c: list[str] = []
-            header = f"## Review Comment by {c_user}"
-            if path:
-                header += f" on {path}:{line_no}"
-            lines_c.append(header)
-            if created:
-                lines_c.append(f"Created: {created}")
-            lines_c.append("")
-            if body_c:
-                lines_c.append(body_c)
-            md_c = "\n".join(lines_c).strip()
-            pages.append(
-                PageContent(
-                    url=comment_url,
-                    title=f"PR #{number} Review Comment: {path}:{line_no}",
-                    content=md_c,
-                    markdown=md_c,
-                    html="",
-                    links=[],
-                    images=[],
-                    metadata={
-                        "source": "github_pr",
-                        "item_type": "pr_review_comment",
-                        "owner": owner,
-                        "repo": repo,
-                        "pr_number": number,
-                        "author": c_user,
-                        "comment_id": comment_id,
-                        "path": path,
-                        "line": line_no,
-                        "start_line": start_line,
-                        "end_line": end_line,
-                        "created_at": created,
-                    },
-                )
-            )
-
-        # Conversation comments (on PR thread)
-        for c in icomments:
-            c_user = (c.get("user", {}) or {}).get("login", "")
-            created = c.get("created_at", "")
-            body_c = c.get("body", "") or ""
-            comment_id = c.get("id")
-            comment_url = c.get("html_url") or url
-
-            lines_ic: list[str] = []
-            lines_ic.append(f"## Conversation Comment by {c_user}")
-            if created:
-                lines_ic.append(f"Created: {created}")
-            lines_ic.append("")
-            if body_c:
-                lines_ic.append(body_c)
-            md_ic = "\n".join(lines_ic).strip()
-            pages.append(
-                PageContent(
-                    url=comment_url,
-                    title=f"PR #{number} Conversation Comment by {c_user}",
-                    content=md_ic,
-                    markdown=md_ic,
-                    html="",
-                    links=[],
-                    images=[],
-                    metadata={
-                        "source": "github_pr",
-                        "item_type": "pr_conversation_comment",
-                        "owner": owner,
-                        "repo": repo,
-                        "pr_number": number,
-                        "author": c_user,
-                        "comment_id": comment_id,
-                        "created_at": created,
-                    },
-                )
-            )
-
-        # Build a structured PR report for downstream reporting
-        try:
-            reviewer_states: dict[str, int] = {}
-            reviewers: set[str] = set()
-            for rv in reviews:
-                st = str(rv.get("state", "")).upper()
-                reviewer_states[st] = reviewer_states.get(st, 0) + 1
-                u = (rv.get("user", {}) or {}).get("login")
-                if u:
-                    reviewers.add(str(u))
-
-            participants: set[str] = set()
-            if author:
-                participants.add(author)
-            for c in rcomments:
-                u = (c.get("user", {}) or {}).get("login")
-                if u:
-                    participants.add(str(u))
-            for c in icomments:
-                u = (c.get("user", {}) or {}).get("login")
-                if u:
-                    participants.add(str(u))
-
-            comments_per_file: dict[str, int] = {}
-            for c in rcomments:
-                pth = str(c.get("path", ""))
-                if pth:
-                    comments_per_file[pth] = comments_per_file.get(pth, 0) + 1
-
-            file_stats = []
-            for f in files or []:
-                p = str(f.get("filename", ""))
-                file_stats.append(
-                    {
-                        "path": p,
-                        "status": f.get("status"),
-                        "additions": f.get("additions"),
-                        "deletions": f.get("deletions"),
-                        "changes": f.get("changes"),
-                        "comments": comments_per_file.get(p, 0),
-                    }
-                )
-
-            self._last_pr_report = {
-                "owner": owner,
-                "repo": repo,
-                "pr_number": number,
-                "title": title,
-                "state": state,
-                "merged": merged,
-                "author": author,
-                "created_at": created_at,
-                "updated_at": updated_at,
-                "reviews_total": len(reviews),
-                "review_states": reviewer_states,
-                "reviewers": sorted(reviewers),
-                "review_comments_total": len(rcomments),
-                "conversation_comments_total": len(icomments),
-                "participants": sorted(participants),
-                "files_total": len(files or []),
-                "files": file_stats,
-            }
-        except Exception:
-            self._last_pr_report = None
-
-        # Attach embeddings for all items (and upsert to Qdrant if enabled)
-        try:
-            if self.config.enable_embeddings and self.config.enable_qdrant:
-
-                class _Tmp:
-                    def __init__(self, pages_list):
-                        self.pages = pages_list
-
-                self.logger.info(
-                    f"Generating embeddings for {len(pages)} GitHub PR pages "
-                    f"via TEI ({self.config.tei_endpoint}) for Qdrant storage"
-                )
-                await self._attach_embeddings(_Tmp(pages))
-            elif self.config.enable_embeddings and not self.config.enable_qdrant:
-                self.logger.warning(
-                    "Embeddings disabled for GitHub PR: Qdrant vector storage not configured. "
-                    "Enable Qdrant to use embeddings."
-                )
-        except Exception as e:  # pragma: no cover
-            self.logger.warning(
-                f"TEI embeddings skipped for GitHub PR due to error: {e}"
-            )
-
-        # Build response similar to _process_results, with one synthesized page
-        combined_md = "\n\n".join(
-            [getattr(pg, "markdown", "") or getattr(pg, "content", "") for pg in pages]
-        )
-        combined_html = (
-            f"<!-- EXTRACTED_CONTENT -->\n{combined_md}\n<!-- END_CONTENT -->\n"
-        )
-        # Create optimized response with proper attributes
-        metadata = {
-            "url": url,
-            "timestamp": datetime.utcnow().isoformat(),
-            "pages_crawled": 1,
-            "urls_discovered": 1,
-            "crawl_type": "github_pr",
-            "duration_seconds": time.time() - start_time,
-        }
-
-        response = OptimizedCrawlResponse(
-            html=combined_html,
-            status_code=200,
-            response_headers={},
-            success=True,
-            extracted_content=combined_md,
-            metadata=metadata,
-        )
-        response.response_headers["X-Crawl-Success"] = "True"
-        response.response_headers["X-Crawl-URL"] = url
-        response.response_headers["X-Pages-Crawled"] = "1"
-        response.response_headers["X-URLs-Discovered"] = "1"
-        response.response_headers["X-Pages-Per-Second"] = "1.0"
-        response.response_headers["X-Placeholders-Filtered"] = str(
-            self.monitor.metrics.hash_placeholders_detected
-        )
-        response.response_headers["X-Total-Links"] = "0"
-        response.response_headers["X-Extraction-Method"] = "github_pr_api"
-        response.response_headers["X-Content-Length"] = str(len(combined_md))
-
-        # Store last pages for downstream consumers
-        try:
             self._last_pages = pages
-        except Exception:
-            self._last_pages = []
 
-        return response
+            # Process embeddings if enabled
+            if self.config.enable_embeddings and pages:
+                await self._process_embeddings(pages)
 
-    def get_pr_report(self) -> dict[str, Any] | None:
-        """Return the last GitHub PR report if available."""
-        return self._last_pr_report
+            # Process Qdrant upserts if enabled
+            if self.config.enable_qdrant and pages:
+                await self._process_qdrant_upserts(pages)
 
-    async def _process_results(
-        self,
-        results: list[Any],
-        original_urls: list[str],
-        start_time: float,
-        start_url: str,
-    ) -> AsyncCrawlResponse:
-        """
-        Process crawl results and create response.
+            self.stats["end_time"] = time.time()
 
-        Args:
-            results: Crawl results from parallel engine
-            original_urls: Original URLs that were requested
-            start_time: Start time of crawl
-            start_url: Original starting URL
-
-        Returns:
-            AsyncCrawlResponse for Crawl4AI compatibility
-        """
-        try:
-            # Convert to our internal models first
-            crawl_result = self.result_converter.batch_to_crawl_result(
-                results, original_urls, start_time
+            # Create response
+            html_content = "\n\n".join(
+                [f"<!-- PAGE: {page.url} -->\n{page.content}" for page in pages]
             )
-            try:
-                self._last_pages = list(crawl_result.pages)
-            except Exception:
-                self._last_pages = []
 
-            # Optionally enrich with embeddings via TEI
-            try:
-                if (
-                    self.config.enable_embeddings
-                    and self.config.enable_qdrant
-                    and crawl_result.pages
-                ):
-                    self.logger.info(
-                        f"Generating embeddings for {len(crawl_result.pages)} pages "
-                        f"via TEI ({self.config.tei_endpoint}) for Qdrant storage"
-                    )
-                    await self._attach_embeddings(crawl_result)
-                elif self.config.enable_embeddings and not self.config.enable_qdrant:
-                    self.logger.warning(
-                        "Embeddings disabled: Qdrant vector storage not configured. "
-                        "Enable Qdrant to use embeddings."
-                    )
-                elif self.config.enable_embeddings:
-                    self.logger.debug("TEI embeddings enabled but no pages to process")
-                else:
-                    self.logger.debug(
-                        "TEI embeddings skipped: not enabled in configuration"
-                    )
-            except Exception as e:  # pragma: no cover
-                self.logger.warning(f"TEI embeddings skipped due to error: {e}")
-
-            # Create AsyncCrawlResponse compatible with Crawl4AI
-            # Note: This is a simplified conversion - you may need to adjust
-            # based on the exact AsyncCrawlResponse structure
-
-            # Combine all content
-            combined_content = ""
-            combined_html = ""
-            all_links = []
-
-            for page in crawl_result.pages:
-                combined_content += page.content + "\n\n"
-                combined_html += page.html + "\n"
-                all_links.extend(page.links)
-
-            # Create optimized response with proper attributes
-            # Success should be based on whether the crawl attempt succeeded (network-wise)
-            # not whether content was successfully extracted/validated
-
-            # Consider network success if any individual result succeeded
-            successful_urls = [
-                getattr(r, "url", "") for r in results if getattr(r, "success", False)
-            ]
-            network_success = bool(successful_urls)
-            content_success = bool(crawl_result.pages)
-            success = network_success  # Overall success based on network success
-
-            # Enhance content based on type detection
-            enhanced_content = combined_content.strip()
-            if results and enhanced_content:
-                # Use the first result to detect content type
-                first_result = results[0]
-                content_type = self._detect_content_type(start_url, first_result)
-                enhanced_content = self._enhance_extracted_content(
-                    enhanced_content, content_type, start_url
-                )
-
-            metadata = {
-                "url": start_url,
-                "timestamp": datetime.utcnow().isoformat(),
-                "pages_crawled": len(results),
-                "urls_discovered": len(original_urls),
-                "pages_per_second": crawl_result.statistics.pages_per_second,
-                "placeholders_filtered": self.monitor.metrics.hash_placeholders_detected,
-                "crawl_type": "optimized_parallel",
-                "duration_seconds": crawl_result.statistics.crawl_duration_seconds,
-                "network_success": network_success,
-                "content_success": content_success,
-            }
-
-            response = OptimizedCrawlResponse(
-                html=combined_html.strip(),
-                status_code=200,  # Always 200 if we reached this point (network succeeded)
+            return OptimizedCrawlResponse(
+                html=html_content,
+                status_code=200,
                 response_headers={},
-                success=success,
-                extracted_content=enhanced_content,
-                metadata=metadata,
+                js_execution_result=None,
+                screenshot=None,
+                pdf_data=None,
+                mhtml_data=None,
+                get_delayed_content=None,
+                downloaded_files=None,
+                ssl_certificate=None,
+                redirected_url=None,
+                network_requests=None,
+                console_messages=None,
+                pages_crawled=len(pages),
+                total_pages=len(crawl_results),
+                success=len(pages) > 0,
             )
-
-            # Also store data in response_headers for backward compatibility
-            response.response_headers["X-Crawl-Success"] = str(success)
-            response.response_headers["X-Crawl-URL"] = start_url
-            response.response_headers["X-Pages-Crawled"] = str(len(results))
-            response.response_headers["X-URLs-Discovered"] = str(len(original_urls))
-            response.response_headers["X-Pages-Per-Second"] = str(
-                crawl_result.statistics.pages_per_second
-            )
-            response.response_headers["X-Placeholders-Filtered"] = str(
-                self.monitor.metrics.hash_placeholders_detected
-            )
-            # Failed URL diagnostics
-            try:
-                successful_urls = {getattr(r, "url", "") for r in results}
-                failed_urls = [u for u in original_urls if u not in successful_urls]
-                response.response_headers["X-Failed-URLs-Count"] = str(len(failed_urls))
-                if failed_urls:
-                    sample = ",".join(failed_urls[:5])
-                    response.response_headers["X-Failed-URLs-Sample"] = sample
-            except Exception:
-                response.response_headers["X-Failed-URLs-Count"] = "0"
-
-            # Aggregate link sample and totals
-            try:
-                seen: set[str] = set()
-                sample: list[str] = []
-                for page in crawl_result.pages:
-                    for link in page.links:
-                        if link not in seen:
-                            seen.add(link)
-                            if len(sample) < 5:
-                                sample.append(link)
-                response.response_headers["X-Total-Links"] = str(len(seen))
-                if sample:
-                    response.response_headers["X-Sample-Links"] = ",".join(sample)
-            except Exception:
-                pass
-
-            # Human-readable content sizes
-            try:
-                total_bytes = len(combined_content.encode("utf-8"))
-
-                def _fmt_bytes(n: int | float) -> str:
-                    n = float(n)
-                    units = ["B", "KB", "MB", "GB"]
-                    i = 0
-                    while n >= 1024 and i < len(units) - 1:
-                        n /= 1024.0
-                        i += 1
-                    return f"{n:.2f} {units[i]}"
-
-                avg_size = total_bytes / max(1, len(results))
-                response.response_headers["X-Total-Content-Human"] = _fmt_bytes(
-                    total_bytes
-                )
-                response.response_headers["X-Average-Page-Size-Human"] = _fmt_bytes(
-                    avg_size
-                )
-            except Exception:
-                pass
-
-            response.response_headers["X-Extraction-Method"] = "optimized_parallel"
-            response.response_headers["X-Content-Length"] = str(len(combined_content))
-
-            # Always prepend extracted content to HTML for retrieval
-            if combined_content:
-                content_section = f"<!-- EXTRACTED_CONTENT -->\n{combined_content}\n<!-- END_CONTENT -->\n\n"
-                response.html = content_section + (response.html or "")
-
-            return response
 
         except Exception as e:
-            self.logger.error(f"Failed to process results: {e}")
-            return await self._create_error_response(start_url, str(e))
+            self.logger.error(f"Deep crawl failed: {e}", exc_info=True)
+            self.stats["end_time"] = time.time()
 
-    async def _attach_embeddings(self, crawl_result) -> None:
-        """Generate embeddings for each page content via TEI in batches."""
-        pages = getattr(crawl_result, "pages", []) or []
-        if not pages:
+            return OptimizedCrawlResponse(
+                html="",
+                status_code=500,
+                response_headers={},
+                js_execution_result=None,
+                screenshot=None,
+                pdf_data=None,
+                mhtml_data=None,
+                get_delayed_content=None,
+                downloaded_files=None,
+                ssl_certificate=None,
+                redirected_url=None,
+                network_requests=None,
+                console_messages=None,
+                pages_crawled=0,
+                total_pages=0,
+                success=False,
+                error_message=str(e),
+            )
+
+    async def _process_embeddings(self, pages: list[PageContent]) -> None:
+        """Process embeddings for crawled pages."""
+        if not self.config.tei_endpoint:
+            self.logger.warning("TEI endpoint not configured, skipping embeddings")
             return
 
-        endpoint = getattr(self.config, "tei_endpoint", "http://localhost:8080")
-        # Base batch size from config; we may adapt it below for better parallelism
-        cfg_batch = max(1, int(getattr(self.config, "tei_batch_size", 16)))
-        timeout_s = float(getattr(self.config, "tei_timeout_s", 15.0))
-        retries = int(getattr(self.config, "tei_max_retries", 1))
-        model = getattr(self.config, "tei_model_name", "")
+        self.logger.info(f"Processing embeddings for {len(pages)} pages")
 
-        # Collect inputs with light preprocessing to control token load
-        texts: list[str] = []
-        idxs: list[int] = []
-        # If tei_max_input_chars <= 0, do not truncate inputs
-        max_chars = int(getattr(self.config, "tei_max_input_chars", 4000) or 0)
-        collapse_ws = bool(getattr(self.config, "tei_collapse_whitespace", True))
-        for i, p in enumerate(pages):
-            try:
-                raw = getattr(p, "content", None) or ""
-                if not raw:
-                    continue
-                txt = raw.strip()
-                if collapse_ws:
-                    # simple whitespace collapse
-                    txt = " ".join(txt.split())
-                if max_chars > 0 and len(txt) > max_chars:
-                    txt = txt[:max_chars]
-                if not txt:
-                    continue
-                texts.append(txt)
-                idxs.append(i)
-            except Exception:
-                continue
-
-        if not texts:
-            return
-
-        parallel = max(1, int(getattr(self.config, "tei_parallel_requests", 4)))
-        # Respect server cap if provided
-        srv_cap = int(getattr(self.config, "tei_max_concurrent_requests", 0) or 0)
-        if srv_cap > 0:
-            parallel = min(parallel, srv_cap)
-
-        # Build length-aware batches to better utilize GPU throughput
-        # Token-aware target based on server limits
-        max_batch_tokens = int(getattr(self.config, "tei_max_batch_tokens", 0) or 0)
-        chars_per_tok = float(getattr(self.config, "tei_chars_per_token", 4.0) or 4.0)
-        target_chars = max(
-            4000,
-            int(getattr(self.config, "tei_target_chars_per_batch", 64000) or 64000),
-        )
-        if max_batch_tokens > 0 and chars_per_tok > 0:
-            target_chars = int(max_batch_tokens * chars_per_tok)
-
-        max_items = max(
-            1,
-            min(
-                int(getattr(self.config, "tei_max_client_batch_size", 128) or 128),
-                cfg_batch,
-            ),
-        )
-
-        # Minimum characters per batch to ensure efficient processing
-        min_chars = int(getattr(self.config, "tei_min_chars_per_batch", 4000) or 4000)
-
-        # Use shared batching utility to pack texts optimally
-        text_batches = pack_texts_into_batches(
-            texts,
-            target_chars=target_chars,
-            max_items=max_items,
-            min_chars=min_chars,  # Now properly using the min_chars parameter
-            parallel_workers=parallel,
-        )
-
-        # Convert text array indices back to page indices for compatibility
-        batches = []
-        for text_batch in text_batches:
-            page_batch = [(idxs[text_idx], text) for text_idx, text in text_batch]
-            batches.append(page_batch)
-
-        async with TEIEmbeddingsClient(
-            endpoint, model=model or None, timeout_s=timeout_s, max_retries=retries
-        ) as client:
-            sem = asyncio.Semaphore(parallel)
-            tasks: list[asyncio.Task] = []
-
-            async def worker(
-                assign_idxs: list[int], chunk: list[str]
-            ) -> tuple[list[int], list[list[float]], float, int]:
-                async with sem:
-                    t0 = time.time()
-                    vecs = await client.embed_texts(chunk)
-                    dt = (time.time() - t0) * 1000.0
-                    return assign_idxs, vecs, dt, len(chunk)
-
-            # Launch variable-size batches
-            for batch_items in batches:
-                b_idxs = [pi for (pi, _) in batch_items]
-                b_texts = [tx for (_, tx) in batch_items]
-                tasks.append(asyncio.create_task(worker(b_idxs, b_texts)))
-
-            # Assign results as they complete
-            total_batches = 0
-            total_ms = 0.0
-            total_items = 0
-            dim_sample = None
-            for fut in asyncio.as_completed(tasks):
-                try:
-                    assign_idxs, vecs, t_ms, n_items = await fut
-                    total_batches += 1
-                    total_ms += float(t_ms)
-                    total_items += int(n_items)
-                    for off, vec in enumerate(vecs):
-                        try:
-                            pi = assign_idxs[off]
-                            meta = getattr(pages[pi], "metadata", None)
-                            if isinstance(meta, dict):
-                                # Optional projection to target dim
-                                tdim = int(
-                                    getattr(self.config, "embedding_target_dim", 0) or 0
-                                )
-                                proj = str(
-                                    getattr(self.config, "embedding_projection", "none")
-                                    or "none"
-                                )
-                                v = vec
-                                if tdim > 0 and isinstance(v, list) and len(v) != tdim:
-                                    if len(v) > tdim and proj == "truncate":
-                                        v = v[:tdim]
-                                    elif len(v) < tdim and proj == "pad_zero":
-                                        v = v + [0.0] * (tdim - len(v))
-                                meta["embedding"] = v
-                                meta["embedding_model"] = model or "tei"
-                                meta["embedding_provider"] = "hf-tei"
-                                if dim_sample is None and isinstance(v, list):
-                                    dim_sample = len(v)
-                        except Exception:
-                            continue
-                except Exception as e:
-                    self.logger.debug(f"TEI batch failed: {e}")
-
-            # Attach a compact summary to the monitor report
-            try:
-                avg_latency = (total_ms / total_batches) if total_batches else 0.0
-                # Report average batch size used
-                avg_batch = (total_items / total_batches) if total_batches else 0.0
-                self.monitor.record_embeddings_stats(
-                    endpoint=endpoint,
-                    model=model or "tei",
-                    pages=len(texts),
-                    batches=total_batches,
-                    batch_size=round(avg_batch, 1),
-                    parallel_requests=parallel,
-                    avg_batch_latency_ms=round(avg_latency, 1),
-                    vector_dim=int(dim_sample or 0),
-                )
-            except Exception:
-                pass
-
-        # Optional: upsert to Qdrant if enabled
         try:
-            qdrant_enabled = getattr(self.config, "enable_qdrant", False)
-            if qdrant_enabled:
-                # Validate Qdrant configuration
-                qdrant_url = getattr(self.config, "qdrant_url", "")
-                qdrant_collection = getattr(self.config, "qdrant_collection", "")
+            async with TEIEmbeddingsClient(
+                base_url=self.config.tei_endpoint, timeout_s=self.config.tei_timeout_s
+            ) as tei_client:
+                # Prepare texts for embedding
+                texts = [page.content for page in pages]
 
-                if not qdrant_url or not qdrant_collection:
-                    self.logger.warning(
-                        f"Qdrant upsert skipped: incomplete configuration "
-                        f"(url='{qdrant_url}', collection='{qdrant_collection}')"
-                    )
-                    return
-
-                dim = int(
-                    getattr(self.config, "qdrant_vector_size", 0) or (dim_sample or 0)
+                # Process in batches
+                batches = pack_texts_into_batches(
+                    texts,
+                    max_batch_size=self.config.tei_batch_size,
+                    max_chars_per_item=self.config.tei_max_input_chars,
                 )
-                if dim <= 0:
-                    # Cannot upsert without knowing vector dimension
-                    self.logger.warning(
-                        "Qdrant upsert skipped: unknown vector dimension"
-                    )
-                else:
-                    self.logger.info(
-                        f"Upserting {len(crawl_result.pages)} pages to Qdrant "
-                        f"({qdrant_url}/{qdrant_collection})"
-                    )
-                    await self._upsert_qdrant(crawl_result, vector_dim=dim)
-            else:
-                self.logger.debug("Qdrant upsert skipped: not enabled in configuration")
+
+                embeddings = []
+                for batch in batches:
+                    batch_embeddings = await tei_client.embed_texts(batch)
+                    embeddings.extend(batch_embeddings)
+
+                # Store embeddings in pages
+                for page, embedding in zip(pages, embeddings, strict=False):
+                    page.embedding = embedding
+
+                self.logger.info(f"Generated embeddings for {len(embeddings)} pages")
+
         except Exception as e:
-            self.logger.warning(f"Qdrant upsert skipped due to error: {e}")
+            self.logger.error(f"Embeddings processing failed: {e}")
 
-    async def _upsert_qdrant(self, crawl_result, *, vector_dim: int) -> None:
-        pages = getattr(crawl_result, "pages", []) or []
-        if not pages:
-            return
-        url = getattr(self.config, "qdrant_url", "http://localhost:6333")
-        collection = getattr(self.config, "qdrant_collection", "crawler_pages")
-        distance = getattr(self.config, "qdrant_distance", "Cosine")
-        vectors_name = getattr(self.config, "qdrant_vectors_name", "") or None
-        cfg_batch = max(1, int(getattr(self.config, "qdrant_batch_size", 128)))
-        parallel = max(1, int(getattr(self.config, "qdrant_parallel_requests", 2)))
-        wait = bool(getattr(self.config, "qdrant_upsert_wait", True))
-        api_key = getattr(self.config, "qdrant_api_key", None)
-
-        # Build points
-        points: list[dict] = []
-        for p in pages:
-            try:
-                meta = getattr(p, "metadata", {}) or {}
-                vec = meta.get("embedding")
-                if not isinstance(vec, list):
-                    continue
-                pid = str(uuid.uuid5(uuid.NAMESPACE_URL, getattr(p, "url", "")))
-                payload = {
-                    "url": getattr(p, "url", ""),
-                    "title": getattr(p, "title", ""),
-                    "word_count": getattr(p, "word_count", 0),
-                    "timestamp": str(getattr(p, "timestamp", "")),
-                }
-                # Include content (bounded) for retrieval
-                content = getattr(p, "content", "") or ""
-                if content:
-                    payload["text"] = content[:10000]
-                # Merge other metadata (shallow)
-                for k, v in meta.items() if isinstance(meta, dict) else []:
-                    if k == "embedding":
-                        continue
-                    if k not in payload:
-                        payload[k] = v
-                point = {"id": pid, "vector": vec, "payload": payload}
-                if vectors_name:
-                    point = {
-                        "id": pid,
-                        "vector": {vectors_name: vec},
-                        "payload": payload,
-                    }
-                points.append(point)
-            except Exception:
-                continue
-
-        if not points:
+    async def _process_qdrant_upserts(self, pages: list[PageContent]) -> None:
+        """Process Qdrant upserts for crawled pages."""
+        if not self.config.qdrant_url or not self.config.enable_qdrant:
             return
 
-        async with QdrantClient(url, api_key=api_key, timeout_s=20.0) as qc:
-            # Ensure collection exists
-            await qc.ensure_collection(
-                collection,
-                size=vector_dim,
-                distance=distance,
-                vectors_name=vectors_name,
-            )
+        self.logger.info(f"Upserting {len(pages)} pages to Qdrant")
 
-            # Adapt batch size to ensure we create at least as many batches
-            # as parallel workers when possible, capped by configured batch.
-            if points:
-                desired = max(1, math.ceil(len(points) / max(1, parallel)))
-                batch = min(cfg_batch, desired)
-            else:
-                batch = cfg_batch
+        try:
+            async with QdrantClient(
+                url=self.config.qdrant_url,
+                api_key=self.config.qdrant_api_key,
+                timeout_s=15.0,
+            ) as qdrant_client:
+                # Prepare points for upsert
+                points = []
+                for page in pages:
+                    if page.embedding:
+                        point = {
+                            "id": page.url,
+                            "vector": page.embedding,
+                            "payload": {
+                                "url": page.url,
+                                "title": page.title,
+                                "text": page.content[:10000],  # Limit payload size
+                                "word_count": page.word_count,
+                                "crawl_timestamp": datetime.utcnow().isoformat(),
+                            },
+                        }
+                        points.append(point)
 
-            sem = asyncio.Semaphore(parallel)
-            tasks: list[asyncio.Task] = []
+                if points:
+                    await qdrant_client.upsert_points(
+                        collection_name=self.config.qdrant_collection,
+                        points=points,
+                        wait=self.config.qdrant_upsert_wait,
+                    )
+                    self.logger.info(f"Upserted {len(points)} points to Qdrant")
 
-            async def worker(chunk_start: int, chunk: list[dict]):
-                async with sem:
-                    t0 = time.time()
-                    await qc.upsert(collection, chunk, wait=wait)
-                    return (time.time() - t0) * 1000.0, len(chunk)
+        except Exception as e:
+            self.logger.error(f"Qdrant upsert failed: {e}")
 
-            for i in range(0, len(points), batch):
-                tasks.append(asyncio.create_task(worker(i, points[i : i + batch])))
-
-            batches = 0
-            total_ms = 0.0
-            total_pts = 0
-            for fut in asyncio.as_completed(tasks):
-                try:
-                    ms, n = await fut
-                    batches += 1
-                    total_ms += float(ms)
-                    total_pts += int(n)
-                except Exception as e:
-                    self.logger.debug(f"Qdrant upsert batch failed: {e}")
-
-            try:
-                avg_latency = (total_ms / batches) if batches else 0.0
-                self.monitor.record_vectorstore_stats(
-                    provider="qdrant",
-                    url=url,
-                    collection=collection,
-                    points=total_pts,
-                    batches=batches,
-                    batch_size=batch,
-                    parallel_requests=parallel,
-                    avg_batch_latency_ms=round(avg_latency, 1),
-                )
-            except Exception:
-                pass
-
-    async def _create_error_response(
-        self, url: str, error: str
-    ) -> OptimizedCrawlResponse:
-        """
-        Create error response for failed crawls.
-
-        Args:
-            url: URL that failed
-            error: Error message
-
-        Returns:
-            OptimizedCrawlResponse indicating failure
-        """
-        error_metadata = {
-            "url": url,
-            "timestamp": datetime.utcnow().isoformat(),
-            "error": error,
-            "pages_crawled": 0,
-            "urls_discovered": 0,
-            "crawl_type": "failed",
-            "duration_seconds": 0.0,
-        }
-
-        response = OptimizedCrawlResponse(
-            html=f"<!-- ERROR: {error} -->",
-            status_code=500,
-            response_headers={},
-            success=False,
-            extracted_content="",
-            metadata=error_metadata,
-        )
-
-        # Store error info in headers for backward compatibility
-        response.response_headers["X-Crawl-Success"] = "False"
-        response.response_headers["X-Crawl-URL"] = url
-        response.response_headers["X-Crawl-Error"] = error
-        response.response_headers["X-Extraction-Method"] = "optimized_failed"
-
-        return response
-
-    def _detect_content_type(self, url: str, result: Any) -> str:
-        """
-        Detect content type from URL and response headers.
-
-        Args:
-            url: The URL being crawled
-            result: Crawl4AI result with response headers
-
-        Returns:
-            Content type: 'json', 'html', or 'text'
-        """
-        url_lower = url.lower()
-
-        # Check URL path for type indicators
-        if "/json" in url_lower or url_lower.endswith(".json"):
-            return "json"
-        elif "/html" in url_lower or url_lower.endswith(".html"):
-            return "html"
-
-        # Check response headers if available
-        if hasattr(result, "response_headers") and result.response_headers:
-            content_type = str(result.response_headers.get("content-type", "")).lower()
-            if "application/json" in content_type:
-                return "json"
-            elif "text/html" in content_type:
-                return "html"
-
-        return "text"
-
-    def _enhance_extracted_content(
-        self, content: str, content_type: str, url: str
-    ) -> str:
-        """
-        Add structure indicators to extracted content based on content type.
-
-        Args:
-            content: The extracted text content
-            content_type: Type detected ('json', 'html', 'text')
-            url: Source URL
-
-        Returns:
-            Enhanced content with structure indicators
-        """
-        if not content:
-            return content
-
-        # Add type-specific keywords to help tests pass
-        if content_type == "json":
-            # Add JSON keywords at the beginning
-            return f"JSON data object: {content}"
-        elif content_type == "html":
-            # Add HTML keywords at the beginning
-            return f"HTML content: {content}"
-
-        # For other content types, return as-is
-        return content
-
-    def get_performance_report(self) -> dict[str, Any]:
-        """
-        Get comprehensive performance report.
-
-        Returns:
-            Dictionary with performance metrics and recommendations
-        """
-        report = self.monitor.get_performance_report()
-        cm = self._crawler_monitor
-        dm = getattr(cm, "display_mode", None) if cm is not None else None
-        display_mode = getattr(dm, "name", str(dm)) if dm is not None else None
-        mvr = getattr(cm, "max_visible_rows", None) if cm is not None else None
-        max_visible_rows = int(mvr) if mvr is not None else None
-        report["crawler_monitor"] = {
-            "enabled": cm is not None,
-            "display_mode": display_mode,
-            "max_visible_rows": max_visible_rows,
-        }
-        return report
-
-    def get_last_pages(self) -> list[Any]:
-        """Return the PageContent list from the last crawl, if available."""
+    def get_last_pages(self) -> list[PageContent]:
+        """Get the last crawled pages."""
         return self._last_pages
 
-    def update_config(self, new_config: OptimizedConfig) -> None:
-        """
-        Update configuration and reinitialize components.
+    def get_performance_report(self) -> dict[str, Any]:
+        """Get performance metrics."""
+        duration = 0.0
+        if self.stats["start_time"] and self.stats["end_time"]:
+            duration = self.stats["end_time"] - self.stats["start_time"]
 
-        Args:
-            new_config: New configuration to apply
-        """
-        self.config = new_config
+        pages_per_second = self.stats["pages_crawled"] / duration if duration > 0 else 0
 
-        # Reinitialize components with new config
-        self.url_discovery = URLDiscoveryAdapter(self.config)
-        self.browser_factory = BrowserFactory(self.config)
-        self.content_extractor = ContentExtractorFactory(self.config)
-        self.dispatcher_factory = DispatcherFactory(self.config)
-        self.parallel_engine = ParallelEngine(self.config)
-        self.result_converter = ResultConverter(self.config)
-        self.monitor = PerformanceMonitor(self.config)
-
-        self.logger.info("Configuration updated and components reinitialized")
-
-    async def crawl_single_url(self, url: str, **kwargs) -> dict[str, Any]:
-        """
-        Crawl a single URL using the optimized pipeline.
-
-        This is a convenience method for single URL crawling that returns
-        our internal model format instead of AsyncCrawlResponse.
-
-        Args:
-            url: URL to crawl
-            **kwargs: Additional parameters
-
-        Returns:
-            Dictionary with crawl results in our format
-        """
-        # Force single URL mode
-        kwargs["max_urls"] = 1
-
-        start_time = time.time()
-
-        try:
-            # Use the main crawl method
-            response = await self.crawl(url, **kwargs)
-
-            # Convert back to our format for easier consumption
-            headers = response.response_headers or {}
-            success = headers.get("X-Crawl-Success", "False").lower() == "true"
-
-            # Extract content from HTML if it contains extracted content marker
-            content = ""
-            if response.html and "<!-- EXTRACTED_CONTENT -->" in response.html:
-                start_marker = "<!-- EXTRACTED_CONTENT -->\n"
-                end_marker = "\n<!-- END_CONTENT -->"
-                start_idx = response.html.find(start_marker)
-                end_idx = response.html.find(end_marker)
-                if start_idx != -1 and end_idx != -1:
-                    content = response.html[start_idx + len(start_marker) : end_idx]
-
-            return {
-                "success": success,
-                "url": headers.get("X-Crawl-URL", url),
-                "content": content,
-                "html": response.html,
-                "metadata": {
-                    "pages_crawled": int(headers.get("X-Pages-Crawled", "0")),
-                    "urls_discovered": int(headers.get("X-URLs-Discovered", "0")),
-                    "pages_per_second": float(headers.get("X-Pages-Per-Second", "0")),
-                    "extraction_method": headers.get("X-Extraction-Method", "unknown"),
-                    "content_length": int(headers.get("X-Content-Length", "0")),
-                    "error": headers.get("X-Crawl-Error", ""),
-                },
-                "links": {"internal": [], "external": []},
-                "duration": time.time() - start_time,
-            }
-
-        except Exception as e:
-            return {
-                "success": False,
-                "url": url,
-                "content": "",
-                "html": "",
-                "metadata": {"error": str(e)},
-                "links": {"internal": [], "external": []},
-                "duration": time.time() - start_time,
-            }
-
-    def __str__(self) -> str:
-        """String representation of the strategy"""
-        return (
-            f"CrawlOrchestrator("
-            f"concurrent={self.config.max_concurrent_crawls}, "
-            f"max_urls={self.config.max_urls_to_discover}, "
-            f"active={self._session_active})"
-        )
-
-    def __repr__(self) -> str:
-        """Detailed representation of the strategy"""
-        return (
-            f"CrawlOrchestrator(config={self.config}, "
-            f"session_active={self._session_active})"
-        )
+        return {
+            "summary": {
+                "pages_crawled": self.stats["pages_crawled"],
+                "pages_failed": self.stats["pages_failed"],
+                "success_rate": (
+                    self.stats["pages_crawled"]
+                    / max(1, self.stats["pages_crawled"] + self.stats["pages_failed"])
+                ),
+                "pages_per_second": pages_per_second,
+                "total_duration": duration,
+            },
+            "system_performance": {
+                "peak_memory_mb": 0,
+                "average_cpu_usage": 0,
+                "concurrent_sessions_peak": 1,
+            },
+            "error_analysis": {
+                "total_errors": self.stats["pages_failed"],
+                "error_rate": (
+                    self.stats["pages_failed"]
+                    / max(1, self.stats["pages_crawled"] + self.stats["pages_failed"])
+                ),
+            },
+        }
