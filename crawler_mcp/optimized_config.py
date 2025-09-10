@@ -7,10 +7,44 @@ performance parameters.
 
 import os
 from dataclasses import dataclass, field
+from enum import Enum
 from typing import Any, Literal
 
 # Valid monitor mode values
 VALID_MONITOR_MODES = ["DETAILED", "AGGREGATED"]
+
+# Default browser arguments for optimized performance
+DEFAULT_BROWSER_ARGS = [
+    "--disable-dev-shm-usage",
+    "--disable-background-timer-throttling",
+    "--disable-backgrounding-occluded-windows",
+    "--disable-renderer-backgrounding",
+    "--disable-features=TranslateUI",
+]
+
+
+class CacheStrategy(str, Enum):
+    """Cache strategy options for crawling."""
+
+    ENABLED = "enabled"
+    BYPASS = "bypass"
+    DISABLED = "disabled"
+    ADAPTIVE = "adaptive"
+
+
+# Default excluded selectors for content filtering
+EXCLUDED_SELECTORS = [
+    "#ads",
+    ".advertisement",
+    ".tracking",
+    ".social-share",
+    ".cookie-banner",
+    ".newsletter-signup",
+    "[class*='ad-']",
+    "[id*='ad-']",
+    ".sidebar-ad",
+    ".sponsored",
+]
 
 
 @dataclass
@@ -300,18 +334,12 @@ class OptimizedConfig:
     """Enable JavaScript execution (disable for text-only crawling)"""
 
     browser_extra_args: list[str] = field(
-        default_factory=lambda: [
-            "--disable-dev-shm-usage",
-            "--disable-background-timer-throttling",
-            "--disable-backgrounding-occluded-windows",
-            "--disable-renderer-backgrounding",
-            "--disable-features=TranslateUI",
-        ]
+        default_factory=lambda: DEFAULT_BROWSER_ARGS.copy()
     )
-    """Extra browser arguments for performance optimization"""
+    """Extra browser arguments for performance optimization (defaults to DEFAULT_BROWSER_ARGS)"""
 
     # CrawlerRunConfig Performance Options
-    cache_strategy: Literal["enabled", "bypass", "disabled", "adaptive"] = "disabled"
+    cache_strategy: CacheStrategy = CacheStrategy.DISABLED
     """Caching strategy: enabled=always cache, bypass=never read cache, disabled=no cache, adaptive=smart caching"""
 
     wait_condition: Literal["domcontentloaded", "networkidle"] = "domcontentloaded"
@@ -327,18 +355,7 @@ class OptimizedConfig:
     """Enable streaming mode for real-time processing and reduced memory usage"""
 
     excluded_selectors: list[str] = field(
-        default_factory=lambda: [
-            "#ads",
-            ".advertisement",
-            ".tracking",
-            ".social-share",
-            ".cookie-banner",
-            ".newsletter-signup",
-            "[class*='ad-']",
-            "[id*='ad-']",
-            ".sidebar-ad",
-            ".sponsored",
-        ]
+        default_factory=lambda: EXCLUDED_SELECTORS.copy()
     )
     """CSS selectors for elements to exclude (ads, tracking, etc.)"""
 
@@ -593,7 +610,7 @@ class OptimizedConfig:
         # Aggressive performance settings
         aggressive.enable_light_mode = True
         aggressive.enable_javascript = False  # Disable JS for speed
-        aggressive.cache_strategy = "enabled"
+        aggressive.cache_strategy = CacheStrategy.ENABLED
         aggressive.wait_condition = "domcontentloaded"
         aggressive.html_delay_seconds = 0.01
         aggressive.enable_text_only_mode = True
@@ -635,7 +652,7 @@ class OptimizedConfig:
         # Conservative performance settings
         conservative.enable_light_mode = False
         conservative.enable_javascript = True  # Keep JS enabled
-        conservative.cache_strategy = "enabled"
+        conservative.cache_strategy = CacheStrategy.ENABLED
         conservative.wait_condition = "networkidle"
         conservative.html_delay_seconds = 0.2
         conservative.enable_text_only_mode = False

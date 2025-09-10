@@ -6,14 +6,14 @@ deep crawling APIs to discover and crawl multiple pages efficiently.
 """
 
 import asyncio
+import hashlib
 import logging
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 
 from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
-from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher, RateLimiter
 from crawl4ai.content_filter_strategy import BM25ContentFilter, PruningContentFilter
 from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
 from crawl4ai.deep_crawling.filters import FilterChain, URLPatternFilter
@@ -39,6 +39,14 @@ class CrawlOrchestrator:
     This orchestrator uses Crawl4AI's documented BFSDeepCrawlStrategy to handle
     both URL discovery and parallel crawling in a single unified process.
     """
+
+    # Class-level cache mode mapping to avoid recreation on every method call
+    _CACHE_MODES: ClassVar[dict[str, CacheMode]] = {
+        "enabled": CacheMode.ENABLED,
+        "bypass": CacheMode.BYPASS,
+        "disabled": CacheMode.DISABLED,
+        "adaptive": CacheMode.ENABLED,  # Default to enabled for adaptive
+    }
 
     def __init__(self, config: OptimizedConfig = None):
         """
@@ -153,9 +161,6 @@ class CrawlOrchestrator:
         config = self._create_optimized_crawler_config(
             deep_crawl_strategy=deep_crawl_strategy, stream=stream, url=start_url
         )
-
-        # Create memory-adaptive dispatcher for optimal performance
-        self._create_dispatcher()
 
         # Execute crawl with enhanced logging
         try:
@@ -399,10 +404,11 @@ class CrawlOrchestrator:
                 points = []
                 for page in pages:
                     if page.embedding:
-                        # Use hash of URL as integer ID (Qdrant requires int or UUID)
-                        url_hash = abs(hash(page.url)) % (
+                        # Use SHA-256 hash for better collision resistance (Qdrant requires int or UUID)
+                        sha256_hash = hashlib.sha256(page.url.encode("utf-8")).digest()
+                        url_hash = int.from_bytes(sha256_hash[:8], "big") % (
                             2**31
-                        )  # Convert to positive 32-bit int
+                        )  # Use first 8 bytes as 32-bit int
                         point = {
                             "id": url_hash,
                             "vector": page.embedding,
@@ -491,42 +497,10 @@ class CrawlOrchestrator:
 
         return CrawlerRunConfig(**crawler_config)
 
-    def _create_dispatcher(self) -> MemoryAdaptiveDispatcher:
-        """Create optimized memory-adaptive dispatcher."""
-        rate_limiter = RateLimiter(
-            base_delay=(
-                self.config.mean_request_delay,
-                self.config.max_request_delay_range,
-            ),
-            max_delay=2.0,
-            max_retries=2,
-        )
-
-        dispatcher = MemoryAdaptiveDispatcher(
-            memory_threshold_percent=self.config.memory_threshold_percent,
-            check_interval=self.config.check_interval,
-            max_session_permit=self.config.max_session_permit,
-            memory_wait_timeout=self.config.memory_wait_timeout,
-            rate_limiter=rate_limiter,
-        )
-
-        self.logger.info(
-            f"Created dispatcher: {self.config.memory_threshold_percent}% memory threshold, "
-            f"{self.config.max_session_permit} max sessions, {self.config.check_interval}s check interval"
-        )
-
-        return dispatcher
-
     def _get_cache_mode(self) -> CacheMode:
         """Get appropriate cache mode based on configuration."""
         strategy = self.config.cache_strategy
-        cache_modes = {
-            "enabled": CacheMode.ENABLED,
-            "bypass": CacheMode.BYPASS,
-            "disabled": CacheMode.DISABLED,
-            "adaptive": CacheMode.ENABLED,  # Default to enabled for adaptive
-        }
-        return cache_modes.get(strategy, CacheMode.ENABLED)
+        return self._CACHE_MODES.get(strategy, CacheMode.ENABLED)
 
     def _create_content_filter(self):
         """Create content filter based on configuration."""
@@ -537,8 +511,17 @@ class CrawlOrchestrator:
                 min_word_threshold=self.config.pruning_min_words,
             )
         elif self.config.content_filter_type == "bm25":
+            if not self.config.bm25_user_query:
+                self.logger.warning(
+                    "BM25 content filter selected but no user query configured, falling back to pruning filter"
+                )
+                return PruningContentFilter(
+                    threshold=self.config.pruning_threshold,
+                    threshold_type=self.config.pruning_threshold_type,
+                    min_word_threshold=self.config.pruning_min_words,
+                )
             return BM25ContentFilter(
-                user_query=self.config.bm25_user_query or "",
+                user_query=self.config.bm25_user_query,
                 bm25_threshold=self.config.bm25_threshold,
             )
         else:

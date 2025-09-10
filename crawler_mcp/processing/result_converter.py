@@ -7,7 +7,7 @@ existing MCP models, enabling seamless integration with the existing system.
 
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 from urllib.parse import urlparse
 
@@ -28,7 +28,7 @@ from crawler_mcp.optimized_config import OptimizedConfig
 class ResultConverter:
     """Converts between Crawl4AI models and our MCP models"""
 
-    def __init__(self, config: OptimizedConfig = None):
+    def __init__(self, config: OptimizedConfig | None = None):
         """
         Initialize result converter.
 
@@ -82,7 +82,7 @@ class ResultConverter:
                 links_count=len(links),
                 images_count=len(images),
                 metadata=metadata,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(UTC),
             )
 
         except Exception as e:
@@ -103,7 +103,7 @@ class ResultConverter:
                 links_count=0,
                 images_count=0,
                 metadata={"conversion_error": str(e)},
-                timestamp=datetime.now(),
+                timestamp=datetime.now(UTC),
             )
 
     def _extract_markdown_content(
@@ -125,14 +125,19 @@ class ResultConverter:
         try:
             markdown_obj = result.markdown
             self.logger.debug(
-                f"Markdown object type: {type(markdown_obj)}, hasattr fit_markdown: {hasattr(markdown_obj, 'fit_markdown')}, hasattr raw_markdown: {hasattr(markdown_obj, 'raw_markdown')}"
+                "Markdown object type: %s, hasattr fit_markdown: %s, hasattr raw_markdown: %s",
+                type(markdown_obj),
+                hasattr(markdown_obj, "fit_markdown"),
+                hasattr(markdown_obj, "raw_markdown"),
             )
 
             # Try fit_markdown first if preferred
             if prefer_fit_markdown and hasattr(markdown_obj, "fit_markdown"):
                 fit_content = markdown_obj.fit_markdown
                 self.logger.debug(
-                    f"fit_markdown content type: {type(fit_content)}, length: {len(str(fit_content)) if fit_content else 0}"
+                    "fit_markdown content type: %s, length: %s",
+                    type(fit_content),
+                    len(str(fit_content)) if fit_content else 0,
                 )
                 if fit_content and str(fit_content).strip():
                     return str(fit_content).strip()
@@ -141,7 +146,9 @@ class ResultConverter:
             if hasattr(markdown_obj, "raw_markdown"):
                 raw_content = markdown_obj.raw_markdown
                 self.logger.debug(
-                    f"raw_markdown content type: {type(raw_content)}, length: {len(str(raw_content)) if raw_content else 0}"
+                    "raw_markdown content type: %s, length: %s",
+                    type(raw_content),
+                    len(str(raw_content)) if raw_content else 0,
                 )
                 if raw_content and str(raw_content).strip():
                     return str(raw_content).strip()
@@ -149,14 +156,17 @@ class ResultConverter:
             # Direct string conversion as last resort
             if isinstance(markdown_obj, str):
                 self.logger.debug(
-                    f"markdown_obj is string, length: {len(markdown_obj)}"
+                    "markdown_obj is string, length: %s", len(markdown_obj)
                 )
                 return markdown_obj.strip()
 
             # Try string conversion of the object
             content = str(markdown_obj).strip()
+            content_preview = content[:100] if len(content) > 100 else content
             self.logger.debug(
-                f"String conversion result: '{content[:100] if len(content) > 100 else content}...' (length: {len(content)})"
+                "String conversion result: '%s...' (length: %s)",
+                content_preview,
+                len(content),
             )
             return content if content != "None" else ""
 
@@ -252,7 +262,7 @@ class ResultConverter:
                     "status_code": getattr(result, "status_code", None),
                     "success": getattr(result, "success", False),
                     "extraction_method": "crawl4ai_optimized",
-                    "crawl_timestamp": datetime.now().isoformat(),
+                    "crawl_timestamp": datetime.now(UTC).isoformat(),
                 }
             )
 
@@ -493,7 +503,7 @@ class ResultConverter:
             links_count=0,
             images_count=0,
             metadata=metadata,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(UTC),
         )
 
     def validate_conversion(

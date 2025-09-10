@@ -13,7 +13,7 @@ from crawler_mcp.optimized_config import OptimizedConfig
 class BrowserFactory:
     """Factory for creating optimized browser configurations using documented Crawl4AI APIs"""
 
-    def __init__(self, config: OptimizedConfig = None):
+    def __init__(self, config: OptimizedConfig | None = None):
         """
         Initialize browser factory.
 
@@ -58,7 +58,6 @@ class BrowserFactory:
             extra_args=[
                 *self.config.browser_extra_args,
                 "--disable-images",
-                "--disable-javascript",
                 "--disable-plugins",
             ],
         )
@@ -88,7 +87,7 @@ class BrowserFactory:
             return self.create_config()
 
         # Check for documentation patterns
-        for pattern in self.config.documentation_patterns:
+        for pattern in self.config.documentation_patterns or []:
             if self._matches_pattern(url, pattern):
                 return self.create_documentation_config()
 
@@ -130,7 +129,6 @@ class BrowserFactory:
             extra_args=[
                 *self.config.browser_extra_args,
                 "--disable-images",
-                "--disable-javascript",
                 "--disable-plugins",
                 "--disable-extensions",
             ],

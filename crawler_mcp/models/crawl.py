@@ -10,6 +10,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Constants
+EMBEDDING_DIM = 384  # Common dimension for sentence-transformers models
+
 
 # Reusable validator function
 def calculate_word_count_validator(v: int, info: Any) -> int:
@@ -44,20 +47,24 @@ class PageContent(BaseModel):
     links: list[str] = Field(default_factory=list)
     images: list[str] = Field(default_factory=list)
     word_count: int = 0
-    links_count: int = 0
-    images_count: int = 0
+    links_count: int = Field(default=0, ge=0)
+    images_count: int = Field(default=0, ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
-    embedding: list[float] | None = None
+    embedding: list[float] | None = Field(default=None, repr=False)
 
-    @field_validator("word_count", mode="before")
+    _validate_word_count = field_validator("word_count", mode="before")(
+        calculate_word_count_validator
+    )
+
+    @field_validator("embedding")
     @classmethod
-    def validate_word_count(cls, v: int, info: Any) -> int:
-        """Calculate word count from content if not provided."""
-        if v == 0 and info.data and "content" in info.data:
-            content = info.data["content"]
-            if content and isinstance(content, str):
-                return len(content.split())
+    def validate_embedding_dimension(cls, v: list[float] | None) -> list[float] | None:
+        """Validate embedding has correct dimension."""
+        if v is not None and len(v) != EMBEDDING_DIM:
+            raise ValueError(
+                f"Embedding dimension mismatch: expected {EMBEDDING_DIM}, got {len(v)}"
+            )
         return v
 
 
