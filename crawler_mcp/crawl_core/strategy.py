@@ -5,16 +5,20 @@ This module implements the main crawler orchestrator that uses Crawl4AI's
 deep crawling APIs to discover and crawl multiple pages efficiently.
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
 
-from crawl4ai import AsyncWebCrawler, CrawlerRunConfig
+from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
+from crawl4ai.async_dispatcher import MemoryAdaptiveDispatcher, RateLimiter
+from crawl4ai.content_filter_strategy import BM25ContentFilter, PruningContentFilter
 from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
 from crawl4ai.deep_crawling.filters import FilterChain, URLPatternFilter
 from crawl4ai.deep_crawling.scorers import KeywordRelevanceScorer
+from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
 from crawler_mcp.clients.qdrant_http_client import QdrantClient
 from crawler_mcp.clients.tei_client import TEIEmbeddingsClient
@@ -144,40 +148,112 @@ class CrawlOrchestrator:
             score_threshold=0.0,  # Lower threshold to allow more pages
         )
 
-        # Configure crawler
-        browser_config = self.browser_factory.get_recommended_config()
+        # Configure crawler with performance optimizations
+        browser_config = self._get_optimized_browser_config(start_url)
+        config = self._create_optimized_crawler_config(
+            deep_crawl_strategy=deep_crawl_strategy, stream=stream, url=start_url
+        )
 
-        # Add deep crawl strategy to config
-        crawler_config_dict = {
-            "deep_crawl_strategy": deep_crawl_strategy,
-            "stream": stream,
-            "page_timeout": self.config.page_timeout,
-            "word_count_threshold": self.config.min_word_count,
-            "excluded_tags": ["script", "style", "noscript"],
-        }
+        # Create memory-adaptive dispatcher for optimal performance
+        self._create_dispatcher()
 
-        # Create config object
-        config = CrawlerRunConfig(**crawler_config_dict)
-
-        # Execute crawl
+        # Execute crawl with enhanced logging
         try:
             self.logger.info("Executing deep crawl with BFSDeepCrawlStrategy")
+            self.logger.info(
+                f"Memory threshold: {self.config.memory_threshold_percent}%, Max sessions: {self.config.max_session_permit}"
+            )
+            self.logger.info(
+                f"Semaphore count: {self.config.crawl_semaphore_count}, Delays: {self.config.mean_request_delay}s-{self.config.max_request_delay_range}s"
+            )
 
             async with AsyncWebCrawler(config=browser_config) as crawler:
                 if stream:
-                    # Stream mode - process results as they arrive
+                    # Stream mode - process results as they arrive with progress logging
                     crawl_results = []
-                    async for result in await crawler.arun(start_url, config=config):
-                        crawl_results.append(result)
-                        self._trigger_hook(
-                            "page_crawled",
-                            url=result.url,
-                            content_length=len(result.markdown or ""),
-                            crawl_time=0.0,
-                        )
-                        self.stats["pages_crawled"] += 1
+                    page_count = 0
+                    start_time = time.time()
+
+                    self.logger.info("Starting streaming crawl...")
+                    try:
+                        async for result in await crawler.arun(
+                            start_url, config=config
+                        ):
+                            # Validate result type to prevent float/invalid objects
+                            if not hasattr(result, "url") or not hasattr(
+                                result, "success"
+                            ):
+                                self.logger.debug(
+                                    f"Skipping invalid result object: {type(result)}"
+                                )
+                                continue
+
+                            page_count += 1
+                            crawl_results.append(result)
+
+                            # Enhanced per-page logging
+                            elapsed = time.time() - start_time
+                            rate = page_count / elapsed if elapsed > 0 else 0
+
+                            if result.success:
+                                # Use fit_markdown if available (filtered content), fallback to raw_markdown
+                                markdown_content = ""
+                                if hasattr(result, "markdown") and result.markdown:
+                                    if (
+                                        hasattr(result.markdown, "fit_markdown")
+                                        and result.markdown.fit_markdown
+                                    ):
+                                        markdown_content = result.markdown.fit_markdown
+                                    elif hasattr(result.markdown, "raw_markdown"):
+                                        markdown_content = (
+                                            result.markdown.raw_markdown or ""
+                                        )
+
+                                content_length = len(markdown_content)
+                                self.logger.info(
+                                    f"✅ Page {page_count}: {result.url} ({content_length} chars, {rate:.1f} pages/sec)"
+                                )
+                                self._trigger_hook(
+                                    "page_crawled",
+                                    url=result.url,
+                                    content_length=content_length,
+                                    crawl_time=elapsed,
+                                )
+                            else:
+                                self.logger.warning(
+                                    f"❌ Page {page_count}: {result.url} - Error: {result.error_message}"
+                                )
+                                self._trigger_hook(
+                                    "page_failed",
+                                    url=result.url,
+                                    error=result.error_message,
+                                    error_type="crawl_failed",
+                                )
+
+                            self.stats["pages_crawled"] = len(
+                                [r for r in crawl_results if r.success]
+                            )
+                            self.stats["pages_failed"] = len(
+                                [r for r in crawl_results if not r.success]
+                            )
+
+                            # Progress logging every 10 pages
+                            if page_count % 10 == 0:
+                                self.logger.info(
+                                    f"Progress: {page_count} pages processed, {rate:.1f} pages/sec"
+                                )
+
+                    except (GeneratorExit, asyncio.CancelledError):
+                        self.logger.info("Stream iteration was cancelled/interrupted")
+                        # This is expected when the generator is cleaned up
+                        pass
+                    except Exception as e:
+                        self.logger.error(f"Error during stream iteration: {e}")
+                        raise
+
                 else:
                     # Non-stream mode - get all results at once
+                    self.logger.info("Starting non-streaming crawl...")
                     crawl_results = await crawler.arun(start_url, config=config)
                     if not isinstance(crawl_results, list):
                         crawl_results = [crawl_results]
@@ -187,6 +263,11 @@ class CrawlOrchestrator:
                     )
                     self.stats["pages_failed"] = len(
                         [r for r in crawl_results if not r.success]
+                    )
+
+                    # Log results summary
+                    self.logger.info(
+                        f"Crawl completed: {self.stats['pages_crawled']} successful, {self.stats['pages_failed']} failed"
                     )
 
             self.logger.info(f"Deep crawl completed: {len(crawl_results)} pages")
@@ -283,8 +364,8 @@ class CrawlOrchestrator:
                 # Process in batches
                 batches = pack_texts_into_batches(
                     texts,
-                    max_batch_size=self.config.tei_batch_size,
-                    max_chars_per_item=self.config.tei_max_input_chars,
+                    max_items=self.config.tei_batch_size,
+                    target_chars=self.config.tei_target_chars_per_batch,
                 )
 
                 embeddings = []
@@ -310,7 +391,7 @@ class CrawlOrchestrator:
 
         try:
             async with QdrantClient(
-                url=self.config.qdrant_url,
+                base_url=self.config.qdrant_url,
                 api_key=self.config.qdrant_api_key,
                 timeout_s=15.0,
             ) as qdrant_client:
@@ -318,8 +399,12 @@ class CrawlOrchestrator:
                 points = []
                 for page in pages:
                     if page.embedding:
+                        # Use hash of URL as integer ID (Qdrant requires int or UUID)
+                        url_hash = abs(hash(page.url)) % (
+                            2**31
+                        )  # Convert to positive 32-bit int
                         point = {
-                            "id": page.url,
+                            "id": url_hash,
                             "vector": page.embedding,
                             "payload": {
                                 "url": page.url,
@@ -332,9 +417,9 @@ class CrawlOrchestrator:
                         points.append(point)
 
                 if points:
-                    await qdrant_client.upsert_points(
-                        collection_name=self.config.qdrant_collection,
-                        points=points,
+                    await qdrant_client.upsert(
+                        self.config.qdrant_collection,
+                        points,
                         wait=self.config.qdrant_upsert_wait,
                     )
                     self.logger.info(f"Upserted {len(points)} points to Qdrant")
@@ -345,6 +430,124 @@ class CrawlOrchestrator:
     def get_last_pages(self) -> list[PageContent]:
         """Get the last crawled pages."""
         return self._last_pages
+
+    def _get_optimized_browser_config(self, url: str):
+        """Get optimized browser configuration based on URL and settings."""
+        if hasattr(self.browser_factory, "get_config_for_url"):
+            return self.browser_factory.get_config_for_url(url)
+        return self.browser_factory.get_recommended_config()
+
+    def _create_optimized_crawler_config(
+        self, deep_crawl_strategy, stream: bool, url: str
+    ) -> CrawlerRunConfig:
+        """Create optimized CrawlerRunConfig with performance settings."""
+
+        # Determine cache strategy
+        cache_mode = self._get_cache_mode()
+
+        # Build excluded selectors
+        excluded_selectors = self.config.excluded_selectors.copy()
+
+        # Build excluded tags
+        excluded_tags = self.config.excluded_tags.copy()
+
+        # Create content filter and markdown generator if enabled
+        markdown_generator = None
+        if (
+            self.config.enable_content_filter
+            and self.config.content_filter_type != "none"
+        ):
+            content_filter = self._create_content_filter()
+            markdown_generator = DefaultMarkdownGenerator(content_filter=content_filter)
+            self.logger.info(
+                f"Created {self.config.content_filter_type} content filter for cleaner markdown"
+            )
+
+        # Create optimized configuration using only valid CrawlerRunConfig parameters
+        crawler_config = {
+            "deep_crawl_strategy": deep_crawl_strategy,
+            "stream": stream,
+            "cache_mode": cache_mode,
+            "page_timeout": self.config.page_timeout,
+            "word_count_threshold": self.config.min_word_count,
+            "excluded_tags": excluded_tags,
+            "excluded_selector": ", ".join(excluded_selectors)
+            if excluded_selectors
+            else None,
+            "wait_until": self.config.wait_condition,
+            "delay_before_return_html": self.config.html_delay_seconds,
+            "only_text": self.config.enable_text_only_mode,
+            "exclude_external_links": self.config.exclude_external_links,
+            "remove_forms": self.config.remove_forms,
+            "exclude_external_images": self.config.exclude_external_images,
+            "semaphore_count": self.config.crawl_semaphore_count,
+            "mean_delay": self.config.mean_request_delay,
+            "max_range": self.config.max_request_delay_range,
+            "markdown_generator": markdown_generator,
+        }
+
+        # Remove None values
+        crawler_config = {k: v for k, v in crawler_config.items() if v is not None}
+
+        return CrawlerRunConfig(**crawler_config)
+
+    def _create_dispatcher(self) -> MemoryAdaptiveDispatcher:
+        """Create optimized memory-adaptive dispatcher."""
+        rate_limiter = RateLimiter(
+            base_delay=(
+                self.config.mean_request_delay,
+                self.config.max_request_delay_range,
+            ),
+            max_delay=2.0,
+            max_retries=2,
+        )
+
+        dispatcher = MemoryAdaptiveDispatcher(
+            memory_threshold_percent=self.config.memory_threshold_percent,
+            check_interval=self.config.check_interval,
+            max_session_permit=self.config.max_session_permit,
+            memory_wait_timeout=self.config.memory_wait_timeout,
+            rate_limiter=rate_limiter,
+        )
+
+        self.logger.info(
+            f"Created dispatcher: {self.config.memory_threshold_percent}% memory threshold, "
+            f"{self.config.max_session_permit} max sessions, {self.config.check_interval}s check interval"
+        )
+
+        return dispatcher
+
+    def _get_cache_mode(self) -> CacheMode:
+        """Get appropriate cache mode based on configuration."""
+        strategy = self.config.cache_strategy
+        cache_modes = {
+            "enabled": CacheMode.ENABLED,
+            "bypass": CacheMode.BYPASS,
+            "disabled": CacheMode.DISABLED,
+            "adaptive": CacheMode.ENABLED,  # Default to enabled for adaptive
+        }
+        return cache_modes.get(strategy, CacheMode.ENABLED)
+
+    def _create_content_filter(self):
+        """Create content filter based on configuration."""
+        if self.config.content_filter_type == "pruning":
+            return PruningContentFilter(
+                threshold=self.config.pruning_threshold,
+                threshold_type=self.config.pruning_threshold_type,
+                min_word_threshold=self.config.pruning_min_words,
+            )
+        elif self.config.content_filter_type == "bm25":
+            return BM25ContentFilter(
+                user_query=self.config.bm25_user_query or "",
+                bm25_threshold=self.config.bm25_threshold,
+            )
+        else:
+            # Fallback to pruning if invalid type
+            return PruningContentFilter(
+                threshold=self.config.pruning_threshold,
+                threshold_type=self.config.pruning_threshold_type,
+                min_word_threshold=self.config.pruning_min_words,
+            )
 
     def get_performance_report(self) -> dict[str, Any]:
         """Get performance metrics."""
@@ -376,5 +579,14 @@ class CrawlOrchestrator:
                     self.stats["pages_failed"]
                     / max(1, self.stats["pages_crawled"] + self.stats["pages_failed"])
                 ),
+            },
+            "performance_config": {
+                "cache_strategy": self.config.cache_strategy,
+                "wait_condition": self.config.wait_condition,
+                "html_delay_seconds": self.config.html_delay_seconds,
+                "text_only_mode": self.config.enable_text_only_mode,
+                "semaphore_count": self.config.crawl_semaphore_count,
+                "browser_mode": self.config.browser_mode,
+                "url_optimization": self.config.enable_url_based_optimization,
             },
         }

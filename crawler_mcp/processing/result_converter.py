@@ -124,25 +124,40 @@ class ResultConverter:
 
         try:
             markdown_obj = result.markdown
+            self.logger.debug(
+                f"Markdown object type: {type(markdown_obj)}, hasattr fit_markdown: {hasattr(markdown_obj, 'fit_markdown')}, hasattr raw_markdown: {hasattr(markdown_obj, 'raw_markdown')}"
+            )
 
             # Try fit_markdown first if preferred
             if prefer_fit_markdown and hasattr(markdown_obj, "fit_markdown"):
                 fit_content = markdown_obj.fit_markdown
+                self.logger.debug(
+                    f"fit_markdown content type: {type(fit_content)}, length: {len(str(fit_content)) if fit_content else 0}"
+                )
                 if fit_content and str(fit_content).strip():
                     return str(fit_content).strip()
 
             # Try raw_markdown as fallback
             if hasattr(markdown_obj, "raw_markdown"):
                 raw_content = markdown_obj.raw_markdown
+                self.logger.debug(
+                    f"raw_markdown content type: {type(raw_content)}, length: {len(str(raw_content)) if raw_content else 0}"
+                )
                 if raw_content and str(raw_content).strip():
                     return str(raw_content).strip()
 
             # Direct string conversion as last resort
             if isinstance(markdown_obj, str):
+                self.logger.debug(
+                    f"markdown_obj is string, length: {len(markdown_obj)}"
+                )
                 return markdown_obj.strip()
 
             # Try string conversion of the object
             content = str(markdown_obj).strip()
+            self.logger.debug(
+                f"String conversion result: '{content[:100] if len(content) > 100 else content}...' (length: {len(content)})"
+            )
             return content if content != "None" else ""
 
         except Exception as e:

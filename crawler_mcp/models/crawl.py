@@ -44,8 +44,11 @@ class PageContent(BaseModel):
     links: list[str] = Field(default_factory=list)
     images: list[str] = Field(default_factory=list)
     word_count: int = 0
+    links_count: int = 0
+    images_count: int = 0
     metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    embedding: list[float] | None = None
 
     @field_validator("word_count", mode="before")
     @classmethod

@@ -96,22 +96,23 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Configure OAuth if enabled
 auth_provider = None
-if settings.oauth_enabled and settings.oauth_provider == "google":
-    try:
-        from fastmcp.server.auth.providers.google import GoogleProvider
+# Temporarily disable OAuth
+# if settings.oauth_enabled and settings.oauth_provider == "google":
+#     try:
+#         from fastmcp.server.auth.providers.google import GoogleProvider
 
-        auth_provider = GoogleProvider(
-            client_id=settings.google_client_id,
-            client_secret=settings.google_client_secret,
-            base_url=settings.google_base_url,
-            required_scopes=settings.google_scopes_list,
-        )
-        logger.info("Google OAuth enabled with base URL: %s", settings.google_base_url)
-    except Exception as e:
-        logger.error("Failed to initialize Google OAuth: %s", e)
-        raise RuntimeError(
-            "OAuth is enabled but GoogleProvider failed to initialize"
-        ) from e
+#         auth_provider = GoogleProvider(
+#             client_id=settings.google_client_id,
+#             client_secret=settings.google_client_secret,
+#             base_url=settings.google_base_url,
+#             required_scopes=settings.google_scopes_list,
+#         )
+#         logger.info("Google OAuth enabled with base URL: %s", settings.google_base_url)
+#     except Exception as e:
+#         logger.error("Failed to initialize Google OAuth: %s", e)
+#         raise RuntimeError(
+#             "OAuth is enabled but GoogleProvider failed to initialize"
+#         ) from e
 
 # FastMCP instance (pass mask_error_details=True to avoid older settings attr lookup)
 try:  # Prefer passing a truthy value so ToolManager won't access settings.mask_error_details

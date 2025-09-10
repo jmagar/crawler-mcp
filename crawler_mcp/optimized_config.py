@@ -132,6 +132,28 @@ class OptimizedConfig:
     extract_metadata: bool = True
     """Extract page metadata (title, description, etc.)"""
 
+    # Content Filtering
+    enable_content_filter: bool = False
+    """Enable content filtering for cleaner markdown generation"""
+
+    content_filter_type: Literal["pruning", "bm25", "none"] = "pruning"
+    """Type of content filter to use"""
+
+    pruning_threshold: float = 0.45
+    """Pruning filter threshold (0-1, higher = more aggressive filtering)"""
+
+    pruning_threshold_type: Literal["fixed", "dynamic"] = "dynamic"
+    """Pruning threshold type - dynamic adjusts based on content"""
+
+    pruning_min_words: int = 10
+    """Minimum words required for a content block to be kept"""
+
+    bm25_threshold: float = 1.2
+    """BM25 relevance threshold for query-based filtering"""
+
+    bm25_user_query: str = ""
+    """User query for BM25 content filtering (empty = auto-detect from page)"""
+
     # Embeddings (HF TEI)
     enable_embeddings: bool = False
     """Generate embeddings for page content via TEI"""
@@ -264,6 +286,110 @@ class OptimizedConfig:
     auto_cleanup: bool = True
     """Enable automatic cleanup when size limits are exceeded"""
 
+    # Advanced Performance Configuration
+    enable_light_mode: bool = True
+    """Enable light_mode in browser for background feature disabling"""
+
+    viewport_width: int = 1280
+    """Browser viewport width for optimal rendering"""
+
+    viewport_height: int = 720
+    """Browser viewport height for optimal rendering"""
+
+    enable_javascript: bool = True
+    """Enable JavaScript execution (disable for text-only crawling)"""
+
+    browser_extra_args: list[str] = field(
+        default_factory=lambda: [
+            "--disable-dev-shm-usage",
+            "--disable-background-timer-throttling",
+            "--disable-backgrounding-occluded-windows",
+            "--disable-renderer-backgrounding",
+            "--disable-features=TranslateUI",
+        ]
+    )
+    """Extra browser arguments for performance optimization"""
+
+    # CrawlerRunConfig Performance Options
+    cache_strategy: Literal["enabled", "bypass", "disabled", "adaptive"] = "disabled"
+    """Caching strategy: enabled=always cache, bypass=never read cache, disabled=no cache, adaptive=smart caching"""
+
+    wait_condition: Literal["domcontentloaded", "networkidle"] = "domcontentloaded"
+    """Page load completion condition for faster crawling"""
+
+    html_delay_seconds: float = 0.05
+    """Delay before capturing HTML content (reduced from default 0.1s)"""
+
+    enable_text_only_mode: bool = False
+    """Extract text-only content for maximum speed"""
+
+    enable_streaming_mode: bool = True
+    """Enable streaming mode for real-time processing and reduced memory usage"""
+
+    excluded_selectors: list[str] = field(
+        default_factory=lambda: [
+            "#ads",
+            ".advertisement",
+            ".tracking",
+            ".social-share",
+            ".cookie-banner",
+            ".newsletter-signup",
+            "[class*='ad-']",
+            "[id*='ad-']",
+            ".sidebar-ad",
+            ".sponsored",
+        ]
+    )
+    """CSS selectors for elements to exclude (ads, tracking, etc.)"""
+
+    exclude_external_links: bool = True
+    """Remove external links from crawled content"""
+
+    remove_forms: bool = False
+    """Remove form elements when they're not needed"""
+
+    exclude_external_images: bool = True
+    """Exclude images from external domains"""
+
+    crawl_semaphore_count: int = 25
+    """Semaphore count for controlling crawl concurrency (increased for better throughput)"""
+
+    mean_request_delay: float = 0.02
+    """Mean delay between requests in seconds (reduced for faster crawling)"""
+
+    max_request_delay_range: float = 0.05
+    """Maximum random delay range for request pacing (reduced for faster crawling)"""
+
+    # Memory Management Configuration
+    memory_threshold_percent: float = 60.0
+    """Memory usage threshold percentage before reducing concurrency"""
+
+    check_interval: float = 0.5
+    """Interval in seconds for checking memory and session status"""
+
+    max_session_permit: int = 20
+    """Maximum number of concurrent crawler sessions allowed"""
+
+    memory_wait_timeout: float = 30.0
+    """Timeout in seconds when waiting for memory to free up"""
+
+    # Content-Type Specific Configurations
+    enable_url_based_optimization: bool = True
+    """Enable URL pattern-based configuration optimization"""
+
+    documentation_patterns: list[str] = field(
+        default_factory=lambda: [
+            "*/docs/*",
+            "*/documentation/*",
+            "*/api/*",
+            "*/guide/*",
+            "*/tutorial/*",
+            "*/reference/*",
+            "*/manual/*",
+        ]
+    )
+    """URL patterns that indicate documentation content"""
+
     # All compatibility flags removed - using only documented Crawl4AI APIs
 
     @classmethod
@@ -346,6 +472,27 @@ class OptimizedConfig:
             "crawler_monitor_mode": "CRAWLER_MONITOR_MODE",
             "crawler_monitor_max_visible_rows": "CRAWLER_MONITOR_MAX_VISIBLE_ROWS",
             "use_http_strategy_when_no_js": "USE_HTTP_STRATEGY_WHEN_NO_JS",
+            # Performance options
+            "enable_light_mode": "ENABLE_LIGHT_MODE",
+            "viewport_width": "VIEWPORT_WIDTH",
+            "viewport_height": "VIEWPORT_HEIGHT",
+            "enable_javascript": "ENABLE_JAVASCRIPT",
+            "cache_strategy": "CACHE_STRATEGY",
+            "wait_condition": "WAIT_CONDITION",
+            "html_delay_seconds": "HTML_DELAY_SECONDS",
+            "enable_text_only_mode": "ENABLE_TEXT_ONLY_MODE",
+            "exclude_external_links": "EXCLUDE_EXTERNAL_LINKS",
+            "remove_forms": "REMOVE_FORMS",
+            "exclude_external_images": "EXCLUDE_EXTERNAL_IMAGES",
+            "crawl_semaphore_count": "CRAWL_SEMAPHORE_COUNT",
+            "mean_request_delay": "MEAN_REQUEST_DELAY",
+            "max_request_delay_range": "MAX_REQUEST_DELAY_RANGE",
+            "enable_url_based_optimization": "ENABLE_URL_BASED_OPTIMIZATION",
+            # Memory management options
+            "memory_threshold_percent": "MEMORY_THRESHOLD_PERCENT",
+            "check_interval": "CHECK_INTERVAL",
+            "max_session_permit": "MAX_SESSION_PERMIT",
+            "memory_wait_timeout": "MEMORY_WAIT_TIMEOUT",
         }
 
         # Load configuration from environment
@@ -443,6 +590,24 @@ class OptimizedConfig:
         aggressive.page_timeout = 15000  # Shorter timeout
         aggressive.discovery_timeout = 5  # Faster discovery
         aggressive.browser_pool_size = 8
+        # Aggressive performance settings
+        aggressive.enable_light_mode = True
+        aggressive.enable_javascript = False  # Disable JS for speed
+        aggressive.cache_strategy = "enabled"
+        aggressive.wait_condition = "domcontentloaded"
+        aggressive.html_delay_seconds = 0.01
+        aggressive.enable_text_only_mode = True
+        aggressive.exclude_external_links = True
+        aggressive.remove_forms = True
+        aggressive.exclude_external_images = True
+        aggressive.crawl_semaphore_count = 40
+        aggressive.mean_request_delay = 0.01
+        aggressive.max_request_delay_range = 0.02
+        # Aggressive memory settings
+        aggressive.memory_threshold_percent = 80.0
+        aggressive.check_interval = 0.3
+        aggressive.max_session_permit = 30
+        aggressive.memory_wait_timeout = 20.0
 
         return aggressive
 
@@ -467,6 +632,24 @@ class OptimizedConfig:
         conservative.discovery_timeout = 15
         conservative.content_validation = True
         conservative.hash_placeholder_detection = True
+        # Conservative performance settings
+        conservative.enable_light_mode = False
+        conservative.enable_javascript = True  # Keep JS enabled
+        conservative.cache_strategy = "enabled"
+        conservative.wait_condition = "networkidle"
+        conservative.html_delay_seconds = 0.2
+        conservative.enable_text_only_mode = False
+        conservative.exclude_external_links = False
+        conservative.remove_forms = False
+        conservative.exclude_external_images = False
+        conservative.crawl_semaphore_count = 10
+        conservative.mean_request_delay = 0.1
+        conservative.max_request_delay_range = 0.3
+        # Conservative memory settings
+        conservative.memory_threshold_percent = 50.0
+        conservative.check_interval = 1.0
+        conservative.max_session_permit = 10
+        conservative.memory_wait_timeout = 60.0
 
         return conservative
 
