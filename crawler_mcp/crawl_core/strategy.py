@@ -9,11 +9,12 @@ import asyncio
 import hashlib
 import logging
 import time
+import uuid
 from datetime import datetime
 from typing import Any, ClassVar
 from urllib.parse import urlparse
 
-from crawl4ai import AsyncWebCrawler, CacheMode, CrawlerRunConfig
+from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
 from crawl4ai.content_filter_strategy import BM25ContentFilter, PruningContentFilter
 from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
 from crawl4ai.deep_crawling.filters import FilterChain, URLPatternFilter
@@ -22,6 +23,7 @@ from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
 from crawler_mcp.clients.qdrant_http_client import QdrantClient
 from crawler_mcp.clients.tei_client import TEIEmbeddingsClient
+from crawler_mcp.config import get_settings
 from crawler_mcp.crawl_core.batch_utils import pack_texts_into_batches
 from crawler_mcp.factories.browser_factory import BrowserFactory
 from crawler_mcp.factories.content_extractor import ContentExtractorFactory
@@ -46,6 +48,8 @@ class CrawlOrchestrator:
         "bypass": CacheMode.BYPASS,
         "disabled": CacheMode.DISABLED,
         "adaptive": CacheMode.ENABLED,  # Default to enabled for adaptive
+        "read_only": CacheMode.READ_ONLY,
+        "write_only": CacheMode.WRITE_ONLY,
     }
 
     def __init__(self, config: OptimizedConfig = None):
@@ -94,13 +98,12 @@ class CrawlOrchestrator:
             try:
                 self._hooks[event](**kwargs)
             except Exception as e:
-                self.logger.debug(f"Hook {event} failed: {e}")
+                self.logger.debug("Hook %s failed: %s", event, e)
 
     async def crawl(
         self,
         start_url: str,
         max_urls: int | None = None,
-        stream: bool = False,
         **kwargs: Any,
     ) -> OptimizedCrawlResponse:
         """
@@ -109,7 +112,6 @@ class CrawlOrchestrator:
         Args:
             start_url: Starting URL to crawl
             max_urls: Maximum number of pages to crawl
-            stream: Whether to stream results
             **kwargs: Additional crawling parameters
 
         Returns:
@@ -117,6 +119,10 @@ class CrawlOrchestrator:
         """
         self.stats["start_time"] = time.time()
         max_urls = max_urls or self.config.max_urls_to_discover
+
+        # Get streaming setting from main config (single source of truth)
+        settings = get_settings()
+        stream = settings.enable_streaming
 
         self.logger.info(f"Starting deep crawl of {start_url} (max: {max_urls} pages)")
 
@@ -235,12 +241,11 @@ class CrawlOrchestrator:
                                     error_type="crawl_failed",
                                 )
 
-                            self.stats["pages_crawled"] = len(
-                                [r for r in crawl_results if r.success]
-                            )
-                            self.stats["pages_failed"] = len(
-                                [r for r in crawl_results if not r.success]
-                            )
+                            # Update stats incrementally for O(1) performance
+                            if result.success:
+                                self.stats["pages_crawled"] += 1
+                            else:
+                                self.stats["pages_failed"] += 1
 
                             # Progress logging every 10 pages
                             if page_count % 10 == 0:
@@ -252,8 +257,8 @@ class CrawlOrchestrator:
                         self.logger.info("Stream iteration was cancelled/interrupted")
                         # This is expected when the generator is cleaned up
                         pass
-                    except Exception as e:
-                        self.logger.error(f"Error during stream iteration: {e}")
+                    except Exception:
+                        self.logger.exception("Error during stream iteration")
                         raise
 
                 else:
@@ -404,13 +409,12 @@ class CrawlOrchestrator:
                 points = []
                 for page in pages:
                     if page.embedding:
-                        # Use SHA-256 hash for better collision resistance (Qdrant requires int or UUID)
+                        # Use full SHA-256 hash converted to UUID for maximum collision resistance
                         sha256_hash = hashlib.sha256(page.url.encode("utf-8")).digest()
-                        url_hash = int.from_bytes(sha256_hash[:8], "big") % (
-                            2**31
-                        )  # Use first 8 bytes as 32-bit int
+                        # Convert first 16 bytes of SHA-256 to UUID (UUID uses 128 bits = 16 bytes)
+                        url_uuid = str(uuid.UUID(bytes=sha256_hash[:16]))
                         point = {
-                            "id": url_hash,
+                            "id": url_uuid,
                             "vector": page.embedding,
                             "payload": {
                                 "url": page.url,
@@ -437,7 +441,7 @@ class CrawlOrchestrator:
         """Get the last crawled pages."""
         return self._last_pages
 
-    def _get_optimized_browser_config(self, url: str):
+    def _get_optimized_browser_config(self, url: str) -> BrowserConfig:
         """Get optimized browser configuration based on URL and settings."""
         if hasattr(self.browser_factory, "get_config_for_url"):
             return self.browser_factory.get_config_for_url(url)
@@ -502,7 +506,7 @@ class CrawlOrchestrator:
         strategy = self.config.cache_strategy
         return self._CACHE_MODES.get(strategy, CacheMode.ENABLED)
 
-    def _create_content_filter(self):
+    def _create_content_filter(self) -> PruningContentFilter | BM25ContentFilter:
         """Create content filter based on configuration."""
         if self.config.content_filter_type == "pruning":
             return PruningContentFilter(

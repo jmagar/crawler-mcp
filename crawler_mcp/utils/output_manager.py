@@ -19,7 +19,7 @@ class OutputManager:
     """Manages all output files with automatic rotation and cleanup."""
 
     def __init__(
-        self, base_dir: str = "./output", config: OptimizedConfig | None = None
+        self, base_dir: str = "./.crawl4ai", config: OptimizedConfig | None = None
     ):
         """Initialize with base directory and configuration.
 

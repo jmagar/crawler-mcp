@@ -412,7 +412,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
     async def crawl(
         ctx: Context,
         target: str,
-        limit: int = 100,
+        limit: int | None = None,
         depth: int = 2,
         max_concurrent: int | None = None,
         include_patterns: list[str] | None = None,
@@ -434,6 +434,8 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 cfg.max_concurrent_crawls = max(1, int(max_concurrent))
             if javascript is not None:
                 cfg.browser_mode = "full" if bool(javascript) else "text"
+            if limit is None:
+                limit = cfg.max_crawl_pages
 
             rag_enabled = _should_ingest_rag(rag_ingest)
             _apply_rag_to_config(cfg, rag_enabled)

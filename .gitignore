@@ -72,10 +72,12 @@ Thumbs.db
 # FastMCP specific
 .fastmcp/
 *.log
+*.log.*
 logs/
 temp/
 tmp/
 *.pid
+server.log
 
 # Crawling data
 crawl_data/
@@ -90,7 +92,7 @@ pages.ndjson
 report.json
 
 # Structured output directory
-output/
+.crawl4ai/
 
 # Data directory contents (but keep structure)
 data/logs/

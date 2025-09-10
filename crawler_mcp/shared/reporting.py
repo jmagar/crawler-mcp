@@ -360,7 +360,7 @@ def print_enhanced_report(
             print(VAL(f"- {r}"))
 
     # Outputs - now handled by OutputManager, show output directory
-    output_dir = getattr(args, "output_dir", "./output")
+    output_dir = getattr(args, "output_dir", "./.crawl4ai")
     if not getattr(args, "skip_output", False):
         print("\n" + H("📝 Outputs"))
         print(KEY("- 📂 Output Directory:"), VAL(output_dir))

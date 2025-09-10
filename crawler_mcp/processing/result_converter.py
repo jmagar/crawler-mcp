@@ -13,7 +13,7 @@ from urllib.parse import urlparse
 
 from crawl4ai.models import CrawlResult as Crawl4AIResult
 
-from crawler_mcp.crawl_core.parallel_engine import CrawlStats
+from crawler_mcp.constants import IMAGE_EXTENSIONS
 
 # Import our existing models
 from crawler_mcp.models.crawl import (
@@ -135,7 +135,7 @@ class ResultConverter:
             if prefer_fit_markdown and hasattr(markdown_obj, "fit_markdown"):
                 fit_content = markdown_obj.fit_markdown
                 self.logger.debug(
-                    "fit_markdown content type: %s, length: %s",
+                    "fit_markdown content type: %s, length: %d",
                     type(fit_content),
                     len(str(fit_content)) if fit_content else 0,
                 )
@@ -146,7 +146,7 @@ class ResultConverter:
             if hasattr(markdown_obj, "raw_markdown"):
                 raw_content = markdown_obj.raw_markdown
                 self.logger.debug(
-                    "raw_markdown content type: %s, length: %s",
+                    "raw_markdown content type: %s, length: %d",
                     type(raw_content),
                     len(str(raw_content)) if raw_content else 0,
                 )
@@ -156,22 +156,27 @@ class ResultConverter:
             # Direct string conversion as last resort
             if isinstance(markdown_obj, str):
                 self.logger.debug(
-                    "markdown_obj is string, length: %s", len(markdown_obj)
+                    "markdown_obj is string, length: %d", len(markdown_obj)
                 )
                 return markdown_obj.strip()
 
             # Try string conversion of the object
             content = str(markdown_obj).strip()
-            content_preview = content[:100] if len(content) > 100 else content
+            # Determine if truncated
+            truncated = len(content) > 100
+            preview = content[:100] if truncated else content
+            suffix = "..." if truncated else ""
+
             self.logger.debug(
-                "String conversion result: '%s...' (length: %s)",
-                content_preview,
+                "String conversion result: '%s%s' (length: %d)",
+                preview,
+                suffix,
                 len(content),
             )
             return content if content != "None" else ""
 
         except Exception as e:
-            self.logger.debug(f"Failed to extract markdown from {result.url}: {e}")
+            self.logger.debug("Failed to extract markdown from %s: %s", result.url, e)
             return ""
 
     def _extract_title(self, result: Crawl4AIResult) -> str:
@@ -223,7 +228,7 @@ class ResultConverter:
             return [link for link in links if self._is_valid_link(link)]
 
         except Exception as e:
-            self.logger.debug(f"Failed to extract links from {result.url}: {e}")
+            self.logger.debug("Failed to extract links from %s: %s", result.url, e)
             return []
 
     def _extract_images(self, result: Crawl4AIResult) -> list[str]:
@@ -248,7 +253,7 @@ class ResultConverter:
             return [img for img in images if self._is_valid_image_url(img)]
 
         except Exception as e:
-            self.logger.debug(f"Failed to extract images from {result.url}: {e}")
+            self.logger.debug("Failed to extract images from %s: %s", result.url, e)
             return []
 
     def _extract_metadata(self, result: Crawl4AIResult) -> dict[str, Any]:
@@ -292,7 +297,7 @@ class ResultConverter:
             return metadata
 
         except Exception as e:
-            self.logger.debug(f"Failed to extract metadata from {result.url}: {e}")
+            self.logger.debug("Failed to extract metadata from %s: %s", result.url, e)
             return {"metadata_error": str(e)}
 
     def _normalize_link(self, link: str | dict[str, Any]) -> str:
@@ -325,12 +330,11 @@ class ResultConverter:
             return False
 
         # Check for common image extensions
-        img_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp"}
         try:
             parsed = urlparse(img_url)
             path = parsed.path.lower()
             return (
-                any(path.endswith(ext) for ext in img_extensions)
+                any(path.endswith(ext) for ext in IMAGE_EXTENSIONS)
                 or "image" in img_url.lower()
             )
         except Exception:
@@ -451,28 +455,6 @@ class ResultConverter:
         except Exception as e:
             self.logger.error(f"Failed to calculate statistics: {e}")
             return CrawlStatistics()
-
-    def crawl_stats_to_statistics(self, stats: CrawlStats) -> CrawlStatistics:
-        """
-        Convert parallel engine CrawlStats to our CrawlStatistics model.
-
-        Args:
-            stats: CrawlStats from parallel engine
-
-        Returns:
-            CrawlStatistics compatible with our system
-        """
-        return CrawlStatistics(
-            total_pages_requested=stats.urls_requested,
-            total_pages_crawled=stats.urls_successful,
-            total_pages_failed=stats.urls_failed,
-            unique_domains=1,  # Would need additional info to calculate
-            total_links_discovered=0,  # Would need additional info to calculate
-            total_bytes_downloaded=stats.total_content_length,
-            crawl_duration_seconds=stats.total_duration,
-            pages_per_second=stats.pages_per_second,
-            average_page_size=stats.average_content_length,
-        )
 
     def create_minimal_page_content(
         self, url: str, error: str | None = None

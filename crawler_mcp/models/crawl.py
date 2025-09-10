@@ -8,14 +8,18 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
-# Constants
-EMBEDDING_DIM = 384  # Common dimension for sentence-transformers models
+# Get embedding dimension from configuration
+from crawler_mcp.config import get_settings
+
+# Use configured dimension or fall back to default
+settings = get_settings()
+EMBEDDING_DIM = settings.embedding_dimension  # Will be 1024 from env or default
 
 
 # Reusable validator function
-def calculate_word_count_validator(v: int, info: Any) -> int:
+def calculate_word_count_validator(v: int, info: ValidationInfo) -> int:
     """Pydantic validator to calculate word count from content."""
     if v == 0 and info.data and "content" in info.data:
         content = info.data["content"]
@@ -59,12 +63,23 @@ class PageContent(BaseModel):
 
     @field_validator("embedding")
     @classmethod
-    def validate_embedding_dimension(cls, v: list[float] | None) -> list[float] | None:
+    def validate_embedding_dimension(
+        cls, v: list[float] | None, info: ValidationInfo
+    ) -> list[float] | None:
         """Validate embedding has correct dimension."""
-        if v is not None and len(v) != EMBEDDING_DIM:
-            raise ValueError(
-                f"Embedding dimension mismatch: expected {EMBEDDING_DIM}, got {len(v)}"
-            )
+        if v is not None:
+            # Get expected dimension from settings
+            from crawler_mcp.config import get_settings
+
+            settings = get_settings()
+            expected_dim = settings.embedding_dimension
+
+            if len(v) != expected_dim:
+                raise ValueError(
+                    f"Embedding dimension mismatch: expected {expected_dim}, got {len(v)}. "
+                    f"To fix: Either recompute embeddings with dimension {expected_dim} or "
+                    f"update EMBEDDING_DIMENSION environment variable to {len(v)}."
+                )
         return v
 
 

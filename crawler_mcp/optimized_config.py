@@ -9,42 +9,46 @@ import os
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Literal
+from urllib.parse import urlparse
 
-# Valid monitor mode values
-VALID_MONITOR_MODES = ["DETAILED", "AGGREGATED"]
-
-# Default browser arguments for optimized performance
-DEFAULT_BROWSER_ARGS = [
-    "--disable-dev-shm-usage",
-    "--disable-background-timer-throttling",
-    "--disable-backgrounding-occluded-windows",
-    "--disable-renderer-backgrounding",
-    "--disable-features=TranslateUI",
-]
-
-
-class CacheStrategy(str, Enum):
-    """Cache strategy options for crawling."""
-
-    ENABLED = "enabled"
-    BYPASS = "bypass"
-    DISABLED = "disabled"
-    ADAPTIVE = "adaptive"
-
-
-# Default excluded selectors for content filtering
-EXCLUDED_SELECTORS = [
-    "#ads",
-    ".advertisement",
-    ".tracking",
-    ".social-share",
-    ".cookie-banner",
-    ".newsletter-signup",
-    "[class*='ad-']",
-    "[id*='ad-']",
-    ".sidebar-ad",
-    ".sponsored",
-]
+from .constants import (
+    AGGRESSIVE_MEMORY_THRESHOLD,
+    AGGRESSIVE_PAGE_TIMEOUT,
+    CONSERVATIVE_MEMORY_THRESHOLD,
+    CONSERVATIVE_PAGE_TIMEOUT,
+    DEFAULT_ALLOWED_LOCALES,
+    # Default collections
+    DEFAULT_BROWSER_ARGS,
+    # Content processing constants
+    DEFAULT_CONTENT_THRESHOLD,
+    DEFAULT_DOCUMENTATION_PATTERNS,
+    DEFAULT_EXCLUDED_SELECTORS,
+    DEFAULT_EXCLUDED_TAGS,
+    # Concurrency constants
+    DEFAULT_MAX_CONCURRENT_CRAWLS,
+    # Memory and performance constants
+    DEFAULT_MEMORY_THRESHOLD,
+    DEFAULT_MIN_WORD_COUNT,
+    # Browser timeout constants
+    DEFAULT_PAGE_TIMEOUT,
+    DEFAULT_RETRY_COUNT,
+    DEFAULT_VIEWPORT_HEIGHT,
+    # Viewport constants
+    DEFAULT_VIEWPORT_WIDTH,
+    MAX_MEMORY_THRESHOLD,
+    MIN_MEMORY_THRESHOLD,
+    TEI_DEFAULT_BATCH_SIZE,
+    TEI_DEFAULT_TIMEOUT,
+    TEI_MAX_BATCH_TOKENS,
+    TEI_MAX_CONCURRENT_REQUESTS,
+    # String enumerations
+    CacheStrategy,
+    ContentFilterType,
+    EmbeddingProjection,
+    MonitorMode,
+    PruningThresholdType,
+    WaitCondition,
+)
 
 
 @dataclass
@@ -54,6 +58,9 @@ class OptimizedConfig:
     # URL Discovery Configuration
     max_urls_to_discover: int = 1000
     """Maximum number of URLs to discover from sitemaps before crawling"""
+
+    max_crawl_pages: int = 100
+    """Maximum number of pages to crawl in a single crawl operation"""
 
     url_score_threshold: float = 0.3
     """Minimum relevance score for URLs to be included in crawling"""
@@ -81,33 +88,24 @@ class OptimizedConfig:
     """User agent string for sitemap requests"""
 
     # Concurrency Configuration
-    max_concurrent_crawls: int = 16
-    """Maximum number of concurrent crawling sessions (optimal for i7-13700K)"""
+    max_concurrent_crawls: int = DEFAULT_MAX_CONCURRENT_CRAWLS
+    """Maximum number of concurrent crawling sessions"""
 
-    memory_threshold: float = 70.0
+    memory_threshold: float = DEFAULT_MEMORY_THRESHOLD
     """Memory usage threshold percentage before reducing concurrency"""
 
     use_aggressive_mode: bool = False
     """Enable aggressive mode with higher concurrency and memory usage"""
 
     # Content Extraction Configuration
-    content_threshold: float = 0.48
+    content_threshold: float = DEFAULT_CONTENT_THRESHOLD
     """Content relevance threshold for PruningContentFilter"""
 
-    min_word_count: int = 50
+    min_word_count: int = DEFAULT_MIN_WORD_COUNT
     """Minimum word count for valid page content"""
 
     excluded_tags: list[str] = field(
-        default_factory=lambda: [
-            "nav",
-            "header",
-            "footer",
-            "aside",
-            "script",
-            "style",
-            "noscript",
-            "iframe",
-        ]
+        default_factory=lambda: DEFAULT_EXCLUDED_TAGS.copy()
     )
     """HTML tags to exclude from content extraction"""
 
@@ -140,7 +138,7 @@ class OptimizedConfig:
     """Ignore crawl delay directives for maximum throughput"""
 
     # Timeout Configuration
-    page_timeout: int = 30000
+    page_timeout: int = DEFAULT_PAGE_TIMEOUT
     """Page load timeout in milliseconds"""
 
     discovery_timeout: int = 10
@@ -170,13 +168,13 @@ class OptimizedConfig:
     enable_content_filter: bool = False
     """Enable content filtering for cleaner markdown generation"""
 
-    content_filter_type: Literal["pruning", "bm25", "none"] = "pruning"
+    content_filter_type: ContentFilterType = ContentFilterType.PRUNING
     """Type of content filter to use"""
 
     pruning_threshold: float = 0.45
     """Pruning filter threshold (0-1, higher = more aggressive filtering)"""
 
-    pruning_threshold_type: Literal["fixed", "dynamic"] = "dynamic"
+    pruning_threshold_type: PruningThresholdType = PruningThresholdType.DYNAMIC
     """Pruning threshold type - dynamic adjusts based on content"""
 
     pruning_min_words: int = 10
@@ -198,13 +196,13 @@ class OptimizedConfig:
     tei_model_name: str = "Qwen3-0.6B"
     """Logical model name to annotate in metadata."""
 
-    tei_batch_size: int = 16
+    tei_batch_size: int = TEI_DEFAULT_BATCH_SIZE
     """Batch size for TEI requests"""
 
-    tei_timeout_s: float = 15.0
+    tei_timeout_s: float = TEI_DEFAULT_TIMEOUT
     """Timeout seconds for TEI requests"""
 
-    tei_max_retries: int = 1
+    tei_max_retries: int = DEFAULT_RETRY_COUNT
     """Retries for TEI calls"""
 
     tei_parallel_requests: int = 4
@@ -221,13 +219,13 @@ class OptimizedConfig:
     """Collapse excessive whitespace before embedding to reduce tokens"""
 
     # TEI server capacity hints (align with compose if provided)
-    tei_max_batch_tokens: int = 0
+    tei_max_batch_tokens: int = TEI_MAX_BATCH_TOKENS
     """Server max batch tokens; if > 0, pack batches by token estimate"""
 
     tei_max_client_batch_size: int = 128
     """Upper bound of items per client request (server --max-client-batch-size)"""
 
-    tei_max_concurrent_requests: int = 0
+    tei_max_concurrent_requests: int = TEI_MAX_CONCURRENT_REQUESTS
     """Server max concurrent requests; if > 0, cap client parallel to this"""
 
     tei_chars_per_token: float = 4.0
@@ -250,7 +248,7 @@ class OptimizedConfig:
     embedding_target_dim: int = 0
     """If > 0, project embeddings to this dimension (truncate/pad)"""
 
-    embedding_projection: str = "none"
+    embedding_projection: EmbeddingProjection = EmbeddingProjection.NONE
     """Projection method: 'none' | 'truncate' | 'pad_zero'"""
 
     # Qdrant (Vector store)
@@ -273,7 +271,9 @@ class OptimizedConfig:
     """Enable content quality validation"""
 
     # Language filtering
-    allowed_locales: list[str] = field(default_factory=lambda: ["en"])
+    allowed_locales: list[str] = field(
+        default_factory=lambda: DEFAULT_ALLOWED_LOCALES.copy()
+    )
     """Restrict crawling to these locale prefixes (e.g., ['en']). Empty = no filter.
 
     A URL like '/fr/docs/...' has locale 'fr'. '/zh-CN/...' has 'zh-CN'. If a locale
@@ -296,10 +296,10 @@ class OptimizedConfig:
     """Max number of internal links to enqueue in the follow-up pass."""
 
     # Output Management Configuration
-    output_dir: str = "./output"
+    output_dir: str = "./.crawl4ai"
     """Base output directory for all crawl results and reports"""
 
-    crawler_monitor_mode: Literal["DETAILED", "AGGREGATED"] = "AGGREGATED"
+    crawler_monitor_mode: MonitorMode = MonitorMode.AGGREGATED
     """Monitoring detail level: DETAILED for per-page logs, AGGREGATED for summary stats"""
 
     max_domain_backups: int = 1
@@ -324,10 +324,10 @@ class OptimizedConfig:
     enable_light_mode: bool = True
     """Enable light_mode in browser for background feature disabling"""
 
-    viewport_width: int = 1280
+    viewport_width: int = DEFAULT_VIEWPORT_WIDTH
     """Browser viewport width for optimal rendering"""
 
-    viewport_height: int = 720
+    viewport_height: int = DEFAULT_VIEWPORT_HEIGHT
     """Browser viewport height for optimal rendering"""
 
     enable_javascript: bool = True
@@ -342,7 +342,7 @@ class OptimizedConfig:
     cache_strategy: CacheStrategy = CacheStrategy.DISABLED
     """Caching strategy: enabled=always cache, bypass=never read cache, disabled=no cache, adaptive=smart caching"""
 
-    wait_condition: Literal["domcontentloaded", "networkidle"] = "domcontentloaded"
+    wait_condition: WaitCondition = WaitCondition.DOM_CONTENT_LOADED
     """Page load completion condition for faster crawling"""
 
     html_delay_seconds: float = 0.05
@@ -351,11 +351,8 @@ class OptimizedConfig:
     enable_text_only_mode: bool = False
     """Extract text-only content for maximum speed"""
 
-    enable_streaming_mode: bool = True
-    """Enable streaming mode for real-time processing and reduced memory usage"""
-
     excluded_selectors: list[str] = field(
-        default_factory=lambda: EXCLUDED_SELECTORS.copy()
+        default_factory=lambda: DEFAULT_EXCLUDED_SELECTORS.copy()
     )
     """CSS selectors for elements to exclude (ads, tracking, etc.)"""
 
@@ -395,15 +392,7 @@ class OptimizedConfig:
     """Enable URL pattern-based configuration optimization"""
 
     documentation_patterns: list[str] = field(
-        default_factory=lambda: [
-            "*/docs/*",
-            "*/documentation/*",
-            "*/api/*",
-            "*/guide/*",
-            "*/tutorial/*",
-            "*/reference/*",
-            "*/manual/*",
-        ]
+        default_factory=lambda: DEFAULT_DOCUMENTATION_PATTERNS.copy()
     )
     """URL patterns that indicate documentation content"""
 
@@ -425,6 +414,7 @@ class OptimizedConfig:
         # Map of attribute names to environment variable suffixes
         env_mappings = {
             "max_urls_to_discover": "MAX_URLS",
+            "max_crawl_pages": "MAX_CRAWL_PAGES",
             "max_concurrent_crawls": "MAX_CONCURRENT",
             "memory_threshold": "MEMORY_THRESHOLD",
             "content_threshold": "CONTENT_THRESHOLD",
@@ -484,11 +474,8 @@ class OptimizedConfig:
             "log_rotation_backups": "LOG_ROTATION_BACKUPS",
             "cache_retention_hours": "CACHE_RETENTION_HOURS",
             "auto_cleanup": "AUTO_CLEANUP",
-            # Monitor & strategy preferences
-            "enable_crawler_monitor": "ENABLE_CRAWLER_MONITOR",
+            # Monitor preferences
             "crawler_monitor_mode": "CRAWLER_MONITOR_MODE",
-            "crawler_monitor_max_visible_rows": "CRAWLER_MONITOR_MAX_VISIBLE_ROWS",
-            "use_http_strategy_when_no_js": "USE_HTTP_STRATEGY_WHEN_NO_JS",
             # Performance options
             "enable_light_mode": "ENABLE_LIGHT_MODE",
             "viewport_width": "VIEWPORT_WIDTH",
@@ -532,11 +519,49 @@ class OptimizedConfig:
                     setattr(config, attr_name, int(env_value))
                 elif isinstance(current_value, float):
                     setattr(config, attr_name, float(env_value))
+                elif isinstance(current_value, Enum):
+                    # Special handling for Enum fields
+                    enum_class = type(current_value)
+                    try:
+                        # Try exact value match first
+                        setattr(config, attr_name, enum_class(env_value))
+                    except ValueError:
+                        # Try with lowercase/uppercase variants for common patterns
+                        try:
+                            if attr_name == "cache_strategy":
+                                setattr(
+                                    config, attr_name, CacheStrategy(env_value.lower())
+                                )
+                            elif attr_name == "wait_condition":
+                                if env_value.lower() == "domcontentloaded":
+                                    setattr(
+                                        config,
+                                        attr_name,
+                                        WaitCondition.DOM_CONTENT_LOADED,
+                                    )
+                                elif env_value.lower() == "networkidle":
+                                    setattr(
+                                        config, attr_name, WaitCondition.NETWORK_IDLE
+                                    )
+                                else:
+                                    setattr(
+                                        config,
+                                        attr_name,
+                                        WaitCondition.DOM_CONTENT_LOADED,
+                                    )
+                            else:
+                                # Try uppercase for other enums
+                                setattr(
+                                    config, attr_name, enum_class(env_value.upper())
+                                )
+                        except ValueError:
+                            # Use default value if invalid
+                            pass  # Keep current_value as default
                 else:
                     # Special handling for crawler_monitor_mode to normalize case
                     if attr_name == "crawler_monitor_mode":
                         normalized_value = env_value.upper()
-                        valid_modes = VALID_MONITOR_MODES
+                        valid_modes = [MonitorMode.DETAILED, MonitorMode.AGGREGATED]
                         if normalized_value not in valid_modes:
                             raise ValueError(
                                 f"Invalid {env_var}: {env_value!r}. "
@@ -572,6 +597,9 @@ class OptimizedConfig:
         for key, value in self.__dict__.items():
             if isinstance(value, list):
                 result[key] = value.copy()
+            elif isinstance(value, Enum):
+                # Serialize Enum to its value
+                result[key] = value.value
             else:
                 result[key] = value
         return result
@@ -602,16 +630,16 @@ class OptimizedConfig:
 
         # Override with aggressive settings
         aggressive.max_concurrent_crawls = 28
-        aggressive.memory_threshold = 85.0
+        aggressive.memory_threshold = AGGRESSIVE_MEMORY_THRESHOLD
         aggressive.use_aggressive_mode = True
-        aggressive.page_timeout = 15000  # Shorter timeout
+        aggressive.page_timeout = AGGRESSIVE_PAGE_TIMEOUT
         aggressive.discovery_timeout = 5  # Faster discovery
         aggressive.browser_pool_size = 8
         # Aggressive performance settings
         aggressive.enable_light_mode = True
         aggressive.enable_javascript = False  # Disable JS for speed
         aggressive.cache_strategy = CacheStrategy.ENABLED
-        aggressive.wait_condition = "domcontentloaded"
+        aggressive.wait_condition = WaitCondition.DOM_CONTENT_LOADED
         aggressive.html_delay_seconds = 0.01
         aggressive.enable_text_only_mode = True
         aggressive.exclude_external_links = True
@@ -643,9 +671,9 @@ class OptimizedConfig:
 
         # Override with conservative settings
         conservative.max_concurrent_crawls = 8
-        conservative.memory_threshold = 60.0
+        conservative.memory_threshold = CONSERVATIVE_MEMORY_THRESHOLD
         conservative.use_aggressive_mode = False
-        conservative.page_timeout = 60000  # Longer timeout
+        conservative.page_timeout = CONSERVATIVE_PAGE_TIMEOUT
         conservative.discovery_timeout = 15
         conservative.content_validation = True
         conservative.hash_placeholder_detection = True
@@ -653,7 +681,7 @@ class OptimizedConfig:
         conservative.enable_light_mode = False
         conservative.enable_javascript = True  # Keep JS enabled
         conservative.cache_strategy = CacheStrategy.ENABLED
-        conservative.wait_condition = "networkidle"
+        conservative.wait_condition = WaitCondition.NETWORK_IDLE
         conservative.html_delay_seconds = 0.2
         conservative.enable_text_only_mode = False
         conservative.exclude_external_links = False
@@ -682,8 +710,13 @@ class OptimizedConfig:
         if self.max_concurrent_crawls < 1:
             errors.append("max_concurrent_crawls must be at least 1")
 
-        if self.memory_threshold < 10.0 or self.memory_threshold > 95.0:
-            errors.append("memory_threshold must be between 10.0 and 95.0")
+        if (
+            self.memory_threshold < MIN_MEMORY_THRESHOLD
+            or self.memory_threshold > MAX_MEMORY_THRESHOLD
+        ):
+            errors.append(
+                f"memory_threshold must be between {MIN_MEMORY_THRESHOLD} and {MAX_MEMORY_THRESHOLD}"
+            )
 
         if self.content_threshold < 0.0 or self.content_threshold > 1.0:
             errors.append("content_threshold must be between 0.0 and 1.0")
@@ -701,11 +734,229 @@ class OptimizedConfig:
             errors.append("excluded_tags should not be empty for optimal performance")
 
         # Validate crawler_monitor_mode
-        valid_monitor_modes = VALID_MONITOR_MODES
+        valid_monitor_modes = [mode.value for mode in MonitorMode]
         if self.crawler_monitor_mode not in valid_monitor_modes:
             errors.append(
                 f"crawler_monitor_mode must be one of {valid_monitor_modes}, "
                 f"got: {self.crawler_monitor_mode!r}"
+            )
+
+        # Run comprehensive validation checks
+        all_errors = []
+        all_errors.extend(self.validate_documentation_patterns())
+        all_errors.extend(self.validate_service_urls())
+        all_errors.extend(self.validate_browser_configuration())
+        all_errors.extend(self.validate_performance_settings())
+        all_errors.extend(self.validate_resource_consistency())
+        all_errors.extend(self.validate_service_dependencies())
+        all_errors.extend(self.validate_performance_trade_offs())
+
+        errors.extend(all_errors)
+        return errors
+
+    def validate_documentation_patterns(self) -> list[str]:
+        """Validate documentation patterns are valid glob patterns."""
+        errors = []
+        import fnmatch
+
+        for pattern in self.documentation_patterns:
+            try:
+                # Test pattern against a dummy URL
+                fnmatch.fnmatch("test.com/docs/page", pattern)
+            except Exception as e:
+                errors.append(f"Invalid documentation pattern '{pattern}': {e}")
+
+        return errors
+
+    def validate_service_urls(self) -> list[str]:
+        """Validate service endpoint URLs."""
+        errors = []
+
+        # Validate TEI endpoint
+        if self.enable_embeddings and self.tei_endpoint:
+            try:
+                parsed = urlparse(self.tei_endpoint)
+                if not parsed.scheme or not parsed.netloc:
+                    errors.append(f"Invalid TEI endpoint URL: {self.tei_endpoint}")
+                elif parsed.scheme not in ("http", "https"):
+                    errors.append(
+                        f"TEI endpoint must use http or https: {self.tei_endpoint}"
+                    )
+            except Exception as e:
+                errors.append(f"Failed to parse TEI endpoint URL: {e}")
+
+        # Validate Qdrant URL
+        if self.enable_qdrant and self.qdrant_url:
+            try:
+                parsed = urlparse(self.qdrant_url)
+                if not parsed.scheme or not parsed.netloc:
+                    errors.append(f"Invalid Qdrant URL: {self.qdrant_url}")
+                elif parsed.scheme not in ("http", "https"):
+                    errors.append(
+                        f"Qdrant URL must use http or https: {self.qdrant_url}"
+                    )
+            except Exception as e:
+                errors.append(f"Failed to parse Qdrant URL: {e}")
+
+        return errors
+
+    def validate_browser_configuration(self) -> list[str]:
+        """Validate browser configuration consistency."""
+        errors = []
+
+        # Check viewport dimensions
+        if self.viewport_width < 800 or self.viewport_height < 600:
+            errors.append(
+                "Viewport dimensions should be at least 800x600 for compatibility"
+            )
+
+        # Check browser mode consistency
+        if self.browser_mode == "text" and self.enable_javascript:
+            errors.append(
+                "JavaScript should be disabled in text mode for optimal performance"
+            )
+
+        if self.browser_mode == "minimal" and not self.text_mode:
+            errors.append("Text mode should be enabled for minimal browser mode")
+
+        return errors
+
+    def validate_performance_settings(self) -> list[str]:
+        """Validate performance-related settings."""
+        errors = []
+
+        # Check semaphore count vs concurrent crawls
+        if (
+            hasattr(self, "crawl_semaphore_count")
+            and self.crawl_semaphore_count > self.max_concurrent_crawls * 2
+        ):
+            errors.append(
+                "crawl_semaphore_count should not exceed 2x max_concurrent_crawls"
+            )
+
+        # Check batch sizes are reasonable
+        if self.tei_batch_size > 1000:
+            errors.append("TEI batch size > 1000 may cause memory issues")
+
+        # Check timeout values
+        if self.page_timeout < 5000:
+            errors.append("Page timeout < 5 seconds may cause incomplete loads")
+
+        return errors
+
+    def validate_resource_consistency(self) -> list[str]:
+        """Validate resource allocation consistency across services."""
+        errors = []
+
+        # Check TEI and Qdrant batch size consistency
+        if (
+            self.enable_embeddings
+            and self.enable_qdrant
+            and self.tei_batch_size < self.qdrant_batch_size
+        ):
+            errors.append(
+                f"TEI batch size ({self.tei_batch_size}) should be >= Qdrant batch size "
+                f"({self.qdrant_batch_size}) for optimal pipeline efficiency"
+            )
+
+        # Check memory vs concurrency settings
+        total_concurrent_operations = self.max_concurrent_crawls
+        if hasattr(self, "tei_parallel_requests"):
+            total_concurrent_operations += self.tei_parallel_requests
+        if hasattr(self, "qdrant_parallel_requests"):
+            total_concurrent_operations += self.qdrant_parallel_requests
+
+        if total_concurrent_operations > 50 and self.memory_threshold < 75.0:
+            errors.append(
+                f"High concurrency ({total_concurrent_operations}) with low memory threshold "
+                f"({self.memory_threshold}%) may cause performance issues"
+            )
+
+        # Check embedding configuration consistency
+        if self.enable_embeddings:
+            if not self.tei_endpoint or self.tei_endpoint == "http://localhost:8080":
+                errors.append(
+                    "TEI endpoint should be configured when embeddings are enabled"
+                )
+
+            if (
+                self.embedding_target_dim > 0
+                and self.enable_qdrant
+                and hasattr(self, "qdrant_vector_size")
+                and self.qdrant_vector_size != self.embedding_target_dim
+            ):
+                errors.append(
+                    f"Embedding target dimension ({self.embedding_target_dim}) "
+                    f"should match Qdrant vector size for consistency"
+                )
+
+        # Check cache strategy vs performance mode
+        if self.use_aggressive_mode and self.cache_strategy != CacheStrategy.ENABLED:
+            errors.append(
+                "Cache should be enabled in aggressive mode for optimal performance"
+            )
+
+        return errors
+
+    def validate_service_dependencies(self) -> list[str]:
+        """Validate that dependent services are properly configured."""
+        errors = []
+
+        # If Qdrant is enabled, check vector configuration
+        if self.enable_qdrant:
+            if not hasattr(self, "qdrant_vector_size") or self.qdrant_vector_size <= 0:
+                errors.append(
+                    "Qdrant vector size must be configured when Qdrant is enabled"
+                )
+
+            if not self.qdrant_collection:
+                errors.append(
+                    "Qdrant collection name must be specified when Qdrant is enabled"
+                )
+
+        # If reranking is enabled, check reranker configuration
+        if self.enable_rerank:
+            if not self.rerank_endpoint and not self.tei_endpoint:
+                errors.append(
+                    "Reranker endpoint must be configured when reranking is enabled"
+                )
+
+            if self.rerank_topk <= 0:
+                errors.append(
+                    "Reranker top-k must be positive when reranking is enabled"
+                )
+
+        return errors
+
+    def validate_performance_trade_offs(self) -> list[str]:
+        """Validate configuration trade-offs make sense."""
+        errors = []
+
+        # Check JavaScript vs text mode consistency
+        if not self.enable_javascript and self.browser_mode == "full":
+            errors.append(
+                "JavaScript should be enabled in full browser mode for best compatibility"
+            )
+
+        # Check stealth mode vs performance
+        if self.stealth_mode and self.use_aggressive_mode:
+            errors.append(
+                "Stealth mode conflicts with aggressive mode (reduces performance)"
+            )
+
+        # Check content filtering vs extraction settings
+        if (
+            self.enable_content_filter
+            and self.content_filter_type == ContentFilterType.NONE
+        ):
+            errors.append(
+                "Content filter type should not be 'none' when content filtering is enabled"
+            )
+
+        # Check virtual scrolling vs performance
+        if self.virtual_scroll_enabled and self.use_aggressive_mode:
+            errors.append(
+                "Virtual scrolling reduces performance and conflicts with aggressive mode"
             )
 
         return errors

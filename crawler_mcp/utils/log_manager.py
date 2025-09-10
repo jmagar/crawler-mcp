@@ -13,7 +13,7 @@ from pathlib import Path
 class LogManager:
     """Manages crawler logging with automatic rotation."""
 
-    def __init__(self, log_dir: str = "./output/logs"):
+    def __init__(self, log_dir: str = "./logs"):
         """Initialize logging configuration.
 
         Args:
@@ -27,8 +27,8 @@ class LogManager:
         self.error_log_path = self.log_dir / "errors.log"
 
         # Rotation settings
-        self.max_bytes = 10 * 1024 * 1024  # 10MB
-        self.backup_count = 3  # Keep 3 rotated versions
+        self.max_bytes = 5 * 1024 * 1024  # 5MB
+        self.backup_count = 1  # Keep 1 rotated version
 
         # Initialize loggers
         self._setup_logging()

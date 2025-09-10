@@ -151,7 +151,7 @@ class PerformanceMonitor:
             )
 
         self.hooks[hook_type].append(hook_func)
-        self.logger.debug(f"Registered hook for {hook_type}")
+        self.logger.debug("Registered hook for %s", hook_type)
 
     def unregister_hook(self, hook_type: str, hook_func: Callable[..., Any]) -> bool:
         """
@@ -316,7 +316,7 @@ class PerformanceMonitor:
         if total_attempts > 0:
             self.metrics.error_rate = self.metrics.pages_failed / total_attempts
 
-        self.logger.debug(f"Recorded failure for {url}: {error_type}")
+        self.logger.debug("Recorded failure for %s: %s", url, error_type)
         self._enqueue_hook(
             "page_failed",
             url=url,
@@ -516,7 +516,7 @@ class PerformanceMonitor:
             )
 
         except Exception as e:
-            self.logger.debug(f"Failed to collect system metrics: {e}")
+            self.logger.debug("Failed to collect system metrics: %s", e)
 
     def _classify_error(self, error: str) -> str:
         """Classify error type for tracking"""
@@ -778,7 +778,7 @@ class PerformanceMonitor:
                 try:
                     await self.trigger_hook(hook_type, **payload)
                 except Exception as e:
-                    self.logger.debug(f"Hook worker error for {hook_type}: {e}")
+                    self.logger.debug("Hook worker error for %s: %s", hook_type, e)
                 finally:
                     self._hook_queue.task_done()
         except asyncio.CancelledError:

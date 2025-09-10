@@ -63,8 +63,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--output-dir",
-        default="./output",
-        help="Base output directory (default: ./output)",
+        default="./.crawl4ai",
+        help="Base output directory (default: ./.crawl4ai)",
     )
     p.add_argument(
         "--no-backup",
@@ -802,7 +802,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     # Initialize output and log managers
     output_mgr = OutputManager(args.output_dir, cfg)
-    log_mgr = LogManager(os.path.join(args.output_dir, "logs"))
+    log_mgr = LogManager("./logs")
 
     # Setup logging
     crawl_logger = log_mgr.setup_crawl_logger()
@@ -811,7 +811,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     # Clean outputs if requested
     if args.clean_outputs:
-        console_logger.info("Cleaning output directory...")
+        console_logger.info("Cleaning .crawl4ai directory...")
         output_mgr.cleanup_old_outputs()
         output_mgr.clean_cache()
 
@@ -898,11 +898,9 @@ async def _run(args: argparse.Namespace) -> int:
             strat.set_hook("performance_sample", on_performance_sample)
     await strat.start()
     try:
-        # Force streaming when per-page logging is requested to reduce latency
+        # Streaming is controlled by ENABLE_STREAMING environment variable
         crawl_logger.info(f"Beginning crawl of {args.url}")
-        resp = await strat.crawl(
-            args.url, stream=(args.stream or args.per_page_log or show_progress)
-        )
+        resp = await strat.crawl(args.url)
         crawl_logger.info("Crawl completed successfully")
 
         # Save outputs using OutputManager (unless --skip-output)
