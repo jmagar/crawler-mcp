@@ -36,6 +36,15 @@ class BrowserFactory:
         else:  # full
             return self._create_full_config()
 
+    def get_recommended_config(self) -> BrowserConfig:
+        """
+        Get recommended browser configuration (alias for create_config).
+
+        Returns:
+            BrowserConfig appropriate for the configured mode
+        """
+        return self.create_config()
+
     def _create_full_config(self) -> BrowserConfig:
         """Create full-featured browser configuration."""
         return BrowserConfig(

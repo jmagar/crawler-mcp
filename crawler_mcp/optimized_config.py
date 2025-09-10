@@ -243,6 +243,9 @@ class OptimizedConfig:
     output_dir: str = "./output"
     """Base output directory for all crawl results and reports"""
 
+    crawler_monitor_mode: Literal["DETAILED", "AGGREGATED"] = "AGGREGATED"
+    """Monitoring detail level: DETAILED for per-page logs, AGGREGATED for summary stats"""
+
     max_domain_backups: int = 1
     """Number of backup copies to keep per domain (latest + N backups)"""
 
