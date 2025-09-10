@@ -1,4 +1,4 @@
+from .crawl4ai_discovery import URLDiscoveryAdapter
 from .result_converter import ResultConverter
-from .url_discovery import URLDiscovery
 
-__all__ = ["ResultConverter", "URLDiscovery"]
+__all__ = ["ResultConverter", "URLDiscoveryAdapter"]

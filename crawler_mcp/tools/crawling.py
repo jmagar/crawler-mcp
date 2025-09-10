@@ -19,7 +19,7 @@ from typing import Any, Literal
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
-from crawler_mcp.crawl_core.strategy import OptimizedCrawlerStrategy
+from crawler_mcp.crawl_core.strategy import CrawlOrchestrator
 from crawler_mcp.middleware.progress import progress_middleware
 from crawler_mcp.models.crawl import PageContent
 from crawler_mcp.optimized_config import OptimizedConfig
@@ -292,7 +292,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
 
             cfg = OptimizedConfig.from_env()
             if javascript is not None:
-                cfg.javascript_enabled = bool(javascript)
+                cfg.browser_mode = "full" if bool(javascript) else "text"
             cfg.page_timeout = max(1000, int(timeout_ms))
 
             rag_enabled = _should_ingest_rag(rag_ingest)
@@ -308,7 +308,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
             session_id = str(uuid.uuid4())
             await ctx.info(f"Crawl session ID: {session_id}")
 
-            strategy = OptimizedCrawlerStrategy(cfg)
+            strategy = CrawlOrchestrator(cfg)
             await ctx.info("Calling strategy.crawl with max_urls=1")
             try:
                 resp = await strategy.crawl(
@@ -327,27 +327,8 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 raise
 
             pages = getattr(strategy, "get_last_pages", lambda: [])()
-            # Compute cleaned content for return; if empty, do bounded JS retry
+            # Compute cleaned content for return
             clean = _get_clean_content(resp, pages)
-            tried_js_retry = False
-            if not clean and (
-                os.getenv("OPTIMIZED_CRAWLER_SCRAPE_RETRY_JS", "true").lower() == "true"
-            ):
-                tried_js_retry = True
-                cfg2 = OptimizedConfig.from_env()
-                cfg2.javascript_enabled = True
-                try:
-                    cfg2.page_timeout = max(int(timeout_ms), 45000)
-                except Exception:
-                    cfg2.page_timeout = max(getattr(cfg2, "page_timeout", 30000), 45000)
-                strategy2 = OptimizedCrawlerStrategy(cfg2)
-                resp2 = await strategy2.crawl(url, max_urls=1, max_concurrent=1)
-                pages2 = getattr(strategy2, "get_last_pages", lambda: [])()
-                clean2 = _get_clean_content(resp2, pages2)
-                if clean2:
-                    resp = resp2
-                    pages = pages2
-                    clean = clean2
 
             paths = output.get_crawl_output_paths(url, session_id)
             output.save_crawl_outputs(
@@ -392,7 +373,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 "network_success": network_success,
                 "content_extracted": content_extracted,
                 "pages_found": len(pages),
-                "retry_js_attempted": tried_js_retry,
+                "retry_js_attempted": False,
             }
 
             # If network succeeded but no content, add diagnosis
@@ -421,7 +402,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 "rag": {"enabled": rag_enabled},
                 "clean_content": clean,
                 "clean_truncated": clean_truncated,
-                "retry_js": tried_js_retry,
+                "retry_js": False,
                 "diagnostics": diagnostics,
             }
         finally:
@@ -452,7 +433,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
             if max_concurrent is not None:
                 cfg.max_concurrent_crawls = max(1, int(max_concurrent))
             if javascript is not None:
-                cfg.javascript_enabled = bool(javascript)
+                cfg.browser_mode = "full" if bool(javascript) else "text"
 
             rag_enabled = _should_ingest_rag(rag_ingest)
             _apply_rag_to_config(cfg, rag_enabled)
@@ -479,7 +460,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 domain_for_index = output.sanitize_domain(url)
                 output.rotate_crawl_backup(domain_for_index)
 
-                strategy = OptimizedCrawlerStrategy(cfg)
+                strategy = CrawlOrchestrator(cfg)
                 resp = await strategy.crawl(
                     url,
                     max_urls=max(1, int(limit)),

@@ -14,7 +14,6 @@ import time
 from collections.abc import AsyncGenerator, Callable
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import Any
 
 from crawl4ai import AsyncWebCrawler, BrowserConfig, CrawlerRunConfig
 from crawl4ai.models import CrawlResult
@@ -22,39 +21,9 @@ from crawl4ai.models import CrawlResult
 from crawler_mcp.optimized_config import OptimizedConfig
 from crawler_mcp.utils.monitoring import PerformanceMonitor  # for type reference
 
-from .adaptive_dispatcher import ConcurrencyTuner
+# ConcurrencyTuner removed - no longer using undocumented APIs
 
-# Optional HTTP-only strategy support (available in some crawl4ai versions)
-# If unavailable, these remain None and the engine will fall back to the default
-# strategy.
-AsyncHTTPCrawlerStrategy: Any | None = None
-HTTPCrawlerConfig: Any | None = None
-try:  # best-effort import; keep flexible to avoid hard dependency
-    # These classes may live under different modules depending on crawl4ai version.
-    # We attempt a few likely locations and ignore failures.
-    from crawl4ai.strategies import (  # type: ignore
-        AsyncHTTPCrawlerStrategy as _AsyncHTTPCrawlerStrategy,
-    )
-    from crawl4ai.strategies import (
-        HTTPCrawlerConfig as _HTTPCrawlerConfig,
-    )
-
-    AsyncHTTPCrawlerStrategy = _AsyncHTTPCrawlerStrategy
-    HTTPCrawlerConfig = _HTTPCrawlerConfig
-except Exception:
-    try:
-        from crawl4ai import (  # type: ignore
-            AsyncHTTPCrawlerStrategy as _AsyncHTTPCrawlerStrategy,
-        )
-        from crawl4ai import (
-            HTTPCrawlerConfig as _HTTPCrawlerConfig,
-        )
-
-        AsyncHTTPCrawlerStrategy = _AsyncHTTPCrawlerStrategy
-        HTTPCrawlerConfig = _HTTPCrawlerConfig
-    except Exception:
-        # Leave as None — code below checks for truthiness before using
-        pass
+# Use only documented Crawl4AI APIs - no private imports
 
 
 @dataclass
@@ -125,40 +94,8 @@ class ParallelEngine:
         # and extraction options actually apply, while keeping filters disabled.
         batch_config = self._prepare_batch_config(crawler_config)
 
-        tuner: ConcurrencyTuner | None = None
-
         try:
-            async with self._open_crawler(browser_config) as crawler:
-                # Best-effort resource blocking via Playwright if available
-                # Prefer Crawl4AI text_mode/light strategies for resource reduction.
-                # Optional manual route interception is disabled by default and can be
-                # enabled via config.use_manual_route_blocking for legacy behavior.
-                if getattr(
-                    self.config, "use_manual_route_blocking", False
-                ) and self._supports_playwright(crawler):
-                    await self._enable_resource_blocking(crawler)
-
-                # Start adaptive concurrency tuning if monitor and dispatcher are
-                # provided
-                if monitor is not None and dispatcher is not None:
-                    try:
-                        max_conc = int(
-                            getattr(
-                                dispatcher,
-                                "max_session_permit",
-                                self.config.max_concurrent_crawls,
-                            )
-                        )
-                    except Exception:
-                        max_conc = self.config.max_concurrent_crawls
-                    tuner = ConcurrencyTuner(
-                        dispatcher=dispatcher,
-                        monitor=monitor,
-                        min_concurrency=2,
-                        max_concurrency=max(2, max_conc),
-                        sample_interval=2.0,
-                    )
-                    tuner.start()
+            async with self._create_crawler(text_only=False) as crawler:
                 results_processed = 0
 
                 # Use arun_many for parallel processing
@@ -166,104 +103,64 @@ class ParallelEngine:
                     urls=urls, config=batch_config, dispatcher=dispatcher
                 )
 
-                # Check if we get a list (batch mode) or async generator
-                # (streaming mode)
-                if hasattr(results_generator, "__aiter__"):
-                    # Streaming mode - iterate over async generator
-                    async for result in results_generator:
-                        results_processed += 1
+                # Process results using unified processing logic
+                async def process_result_iterator():
+                    """Unified iterator for both streaming and batch modes"""
+                    if hasattr(results_generator, "__aiter__"):
+                        # Streaming mode - iterate over async generator
+                        async for result in results_generator:
+                            yield result
+                    else:
+                        # Batch mode - iterate over list
+                        for result in results_generator:
+                            yield result
 
-                        if result.success:
-                            # Track HTTP successful URLs regardless of content
-                            # validation
-                            http_successful_urls.append(result.url)
+                async for result in process_result_iterator():
+                    results_processed += 1
 
-                            # Validate content quality
-                            if self._is_valid_content(result, monitor):
-                                successful_results.append(result)
+                    if result.success:
+                        # Track HTTP successful URLs regardless of content validation
+                        http_successful_urls.append(result.url)
 
-                                # Report progress if callback provided
-                                if progress_callback:
-                                    progress_callback(
-                                        len(successful_results),
-                                        len(urls),
-                                        f"Crawled: {result.url}",
-                                    )
-                            else:
-                                hash_placeholder_urls.append(result.url)
-                                if monitor is not None:
-                                    import contextlib
+                        # Validate content quality
+                        if self._is_valid_content(result, monitor):
+                            successful_results.append(result)
 
-                                    with contextlib.suppress(Exception):
-                                        monitor.record_hash_placeholder(result.url)
-                                self.logger.warning(
-                                    f"Filtered invalid content: {result.url}"
+                            # Report progress if callback provided
+                            if progress_callback:
+                                progress_callback(
+                                    len(successful_results),
+                                    len(urls),
+                                    f"Crawled: {result.url}",
                                 )
                         else:
-                            failed_urls.append(result.url)
-                            self.logger.debug(
-                                f"Crawl failed: {result.url} - "
-                                f"{getattr(result, 'error', 'Unknown error')}"
+                            # result.success is True but content deemed invalid
+                            hash_placeholder_urls.append(result.url)
+                            if monitor is not None:
+                                import contextlib
+
+                                with contextlib.suppress(Exception):
+                                    monitor.record_hash_placeholder(result.url)
+                            self.logger.warning(
+                                f"Filtered invalid content: {result.url}"
                             )
+                    else:
+                        # result.success is False
+                        failed_urls.append(result.url)
+                        self.logger.debug(
+                            f"Crawl failed: {result.url} - "
+                            f"{getattr(result, 'error', 'Unknown error')}"
+                        )
 
-                        # Log progress periodically
-                        if results_processed % 10 == 0:
-                            self.logger.info(
-                                f"Processed {results_processed}/{len(urls)} URLs"
-                            )
-
-                else:
-                    # Batch mode - results_generator is a list
-                    for result in results_generator:
-                        results_processed += 1
-
-                        if result.success:
-                            # Track HTTP successful URLs regardless of content
-                            # validation
-                            http_successful_urls.append(result.url)
-
-                            # Validate content quality
-                            if self._is_valid_content(result, monitor):
-                                successful_results.append(result)
-
-                                # Report progress if callback provided
-                                if progress_callback:
-                                    progress_callback(
-                                        len(successful_results),
-                                        len(urls),
-                                        f"Crawled: {result.url}",
-                                    )
-                            else:
-                                # result.success is True but content deemed invalid
-                                hash_placeholder_urls.append(result.url)
-                                if monitor is not None:
-                                    import contextlib
-
-                                    with contextlib.suppress(Exception):
-                                        monitor.record_hash_placeholder(result.url)
-                                self.logger.warning(
-                                    f"Filtered invalid content: {result.url}"
-                                )
-                        else:
-                            # result.success is False
-                            failed_urls.append(result.url)
-                            self.logger.debug(
-                                f"Crawl failed: {result.url} - "
-                                f"{getattr(result, 'error', 'Unknown error')}"
-                            )
-
-                        # Log progress periodically
-                        if results_processed % 10 == 0:
-                            self.logger.info(
-                                f"Processed {results_processed}/{len(urls)} URLs"
-                            )
+                    # Log progress periodically
+                    if results_processed % 10 == 0:
+                        self.logger.info(
+                            f"Processed {results_processed}/{len(urls)} URLs"
+                        )
 
         except Exception as e:
             self.logger.error(f"Parallel crawl failed: {e}")
             # Return whatever results we managed to get
-        finally:
-            if tuner:
-                tuner.stop()
 
         # Log final statistics
         end_time = time.time()
@@ -281,142 +178,32 @@ class ParallelEngine:
         # Consider returning metadata separately (e.g., alongside results) if
         # needed downstream.
 
-        # Optional bounded retry for placeholder/invalid pages
-        try:
-            if (
-                hash_placeholder_urls
-                and getattr(self.config, "placeholder_retry_enabled", True)
-                and int(getattr(self.config, "placeholder_retry_attempts", 1)) > 0
-            ):
-                urls_to_retry = list(dict.fromkeys(hash_placeholder_urls))
-                attempts = int(getattr(self.config, "placeholder_retry_attempts", 1))
-                self.logger.info(
-                    f"Retrying {len(urls_to_retry)} URLs flagged as placeholders "
-                    f"(attempts={attempts})"
-                )
-
-                # Build a quality-focused run config for retry
-                retry_config = self._clone_config(crawler_config)
-                from contextlib import suppress
-
-                # Prefer increased delay and timeout over undocumented JS flags
-                try:
-                    cur = float(getattr(retry_config, "delay_before_return_html", 0.5))
-                except Exception:
-                    cur = 0.5
-                js_retry = bool(getattr(self.config, "placeholder_retry_with_js", True))
-                with suppress(Exception):
-                    retry_config.delay_before_return_html = (
-                        max(3.0, cur) if js_retry else max(1.0, cur)
-                    )
-                with suppress(Exception):
-                    retry_config.page_timeout = max(
-                        int(
-                            getattr(self.config, "placeholder_retry_timeout_ms", 15000)
-                        ),
-                        int(getattr(retry_config, "page_timeout", 10000)),
-                    )
-
-                for _ in range(attempts):
-                    if not urls_to_retry:
-                        break
-                    recovered: dict[str, CrawlResult] = {}
-                    try:
-                        async with self._open_crawler(browser_config) as crawler:
-                            if getattr(
-                                self.config, "use_manual_route_blocking", False
-                            ) and self._supports_playwright(crawler):
-                                await self._enable_resource_blocking(crawler)
-                            gen = await crawler.arun_many(
-                                urls=urls_to_retry,
-                                config=retry_config,
-                                dispatcher=dispatcher,
-                            )
-                            if hasattr(gen, "__aiter__"):
-                                async for rr in gen:
-                                    if rr.success and self._is_valid_content(rr, None):
-                                        recovered[rr.url] = rr
-                            else:
-                                for rr in gen:
-                                    if rr.success and self._is_valid_content(rr, None):
-                                        recovered[rr.url] = rr
-                    except Exception as e:
-                        self.logger.warning(f"Retry pass failed: {e}")
-
-                    # Merge recovered results, remove from retry set
-                    if recovered:
-                        self.logger.info(
-                            f"Recovered {len(recovered)} pages after retry"
-                        )
-                        # Replace prior filtered items (dedupe by URL)
-                        seen = {r.url for r in successful_results}
-                        for url, rr in recovered.items():
-                            if url not in seen:
-                                successful_results.append(rr)
-                                seen.add(url)
-                        urls_to_retry = [u for u in urls_to_retry if u not in recovered]
-
-                if urls_to_retry:
-                    self.logger.info(
-                        f"Dropping {len(urls_to_retry)} pages that remained "
-                        f"placeholders after retry"
-                    )
-        except Exception as e:
-            self.logger.debug(f"Retry flow skipped due to error: {e}")
-
         return successful_results
 
-    def _open_crawler(self, browser_config: BrowserConfig) -> AsyncWebCrawler:
-        """Return an AsyncWebCrawler context, using HTTP strategy when JS is
-        disabled (if enabled in config)."""
-        use_http = bool(getattr(self.config, "use_http_strategy_when_no_js", False))
-        js_enabled = bool(
-            getattr(
-                browser_config,
-                "java_script_enabled",
-                getattr(
-                    browser_config,
-                    "enable_javascript",
-                    getattr(browser_config, "javascript_enabled", True),
-                ),
-            )
-        )
-        if (
-            use_http
-            and not js_enabled
-            and AsyncHTTPCrawlerStrategy
-            and HTTPCrawlerConfig
-        ):
-            try:
-                # Build a minimal HTTP config; reuse UA if present on browser_config
-                headers = {}
-                ua = getattr(browser_config, "user_agent", None)
-                if ua:
-                    headers["User-Agent"] = ua
-                http_cfg = HTTPCrawlerConfig(
-                    method="GET",
-                    headers=headers or None,
-                    follow_redirects=True,
-                    verify_ssl=True,
-                )
-                return AsyncWebCrawler(
-                    crawler_strategy=AsyncHTTPCrawlerStrategy(browser_config=http_cfg)
-                )
-            except Exception as e:
-                self.logger.debug(
-                    "HTTP strategy unavailable or failed (%s); falling back to "
-                    "browser crawler",
-                    e,
-                )
-        # Default to regular browser strategy
-        return AsyncWebCrawler(config=browser_config)
+    def _create_crawler(self, text_only: bool = False) -> AsyncWebCrawler:
+        """Create crawler with appropriate configuration.
+
+        Args:
+            text_only: If True, use text_mode for lightweight crawling
+
+        Returns:
+            AsyncWebCrawler configured appropriately
+        """
+        if text_only:
+            # Use text_mode for lightweight crawling (replaces HTTP strategy)
+            config = BrowserConfig(text_mode=True, headless=True)
+        else:
+            # Standard browser with full features
+            config = BrowserConfig(headless=True)
+
+        return AsyncWebCrawler(config=config)
 
     async def crawl_batch_raw(
         self,
         urls: list[str],
-        browser_config: BrowserConfig,
         crawler_config: CrawlerRunConfig,
         dispatcher=None,
+        text_only: bool = False,
     ) -> list[CrawlResult]:
         """
         Crawl multiple URLs and return raw CrawlResult objects without content
@@ -433,11 +220,7 @@ class ParallelEngine:
         batch_config = self._prepare_batch_config(crawler_config)
 
         try:
-            async with self._open_crawler(browser_config) as crawler:
-                if getattr(
-                    self.config, "use_manual_route_blocking", False
-                ) and self._supports_playwright(crawler):
-                    await self._enable_resource_blocking(crawler)
+            async with self._create_crawler(text_only=False) as crawler:
                 gen = await crawler.arun_many(
                     urls=urls, config=batch_config, dispatcher=dispatcher
                 )
@@ -487,33 +270,8 @@ class ParallelEngine:
         batch_config = self._prepare_batch_config(crawler_config)
         batch_config.stream = True
 
-        tuner: ConcurrencyTuner | None = None
-
         try:
-            async with self._open_crawler(browser_config) as crawler:
-                if getattr(
-                    self.config, "use_manual_route_blocking", False
-                ) and self._supports_playwright(crawler):
-                    await self._enable_resource_blocking(crawler)
-                if monitor is not None and dispatcher is not None:
-                    try:
-                        max_conc = int(
-                            getattr(
-                                dispatcher,
-                                "max_session_permit",
-                                self.config.max_concurrent_crawls,
-                            )
-                        )
-                    except Exception:
-                        max_conc = self.config.max_concurrent_crawls
-                    tuner = ConcurrencyTuner(
-                        dispatcher=dispatcher,
-                        monitor=monitor,
-                        min_concurrency=2,
-                        max_concurrency=max(2, max_conc),
-                        sample_interval=2.0,
-                    )
-                    tuner.start()
+            async with self._create_crawler(text_only=False) as crawler:
                 results_generator = await crawler.arun_many(
                     urls=urls, config=batch_config, dispatcher=dispatcher
                 )
@@ -553,142 +311,6 @@ class ParallelEngine:
 
         except Exception as e:
             self.logger.error(f"Streaming crawl failed: {e}")
-        finally:
-            if tuner:
-                tuner.stop()
-
-    async def crawl_with_retry(
-        self,
-        urls: list[str],
-        browser_config: BrowserConfig,
-        crawler_config: CrawlerRunConfig,
-        dispatcher=None,
-        monitor: PerformanceMonitor | None = None,
-        max_retries: int = 2,
-        retry_delay: float = 1.0,
-    ) -> list[CrawlResult]:
-        """
-        Crawl URLs with automatic retry for failed requests.
-
-        Args:
-            urls: List of URLs to crawl
-            browser_config: Browser configuration
-            crawler_config: Crawler run configuration
-            dispatcher: Optional dispatcher for concurrency management
-            max_retries: Maximum number of retry attempts
-            retry_delay: Delay between retries in seconds
-
-        Returns:
-            List of successful CrawlResult objects
-        """
-        all_results = []
-        urls_to_retry = urls.copy()
-
-        for attempt in range(max_retries + 1):
-            if not urls_to_retry:
-                break
-
-            attempt_results = await self.crawl_batch(
-                urls_to_retry,
-                browser_config,
-                crawler_config,
-                dispatcher,
-                monitor=monitor,
-            )
-            # Track successful URLs
-            successful_urls = {result.url for result in attempt_results}
-            all_results.extend(attempt_results)
-
-            # Determine which URLs need retry
-            urls_to_retry = [u for u in urls_to_retry if u not in successful_urls]
-
-            if urls_to_retry and attempt < max_retries:
-                self.logger.info(
-                    f"Retrying {len(urls_to_retry)} failed URLs "
-                    f"(attempt {attempt + 2}/{max_retries + 1})"
-                )
-                if retry_delay > 0:
-                    await asyncio.sleep(retry_delay)
-
-        if urls_to_retry:
-            self.logger.warning(
-                f"Failed to crawl {len(urls_to_retry)} URLs after "
-                f"{max_retries + 1} attempts"
-            )
-
-        return all_results
-
-    def _supports_playwright(self, crawler: Any) -> bool:
-        """Check if the crawler supports Playwright route interception."""
-        # Check for context routing capability
-        for attr in ("context", "_context", "browser_context"):
-            context = getattr(crawler, attr, None)
-            if context and hasattr(context, "route"):
-                return True
-        # Check for page routing capability
-        page = getattr(crawler, "page", None) or getattr(crawler, "_page", None)
-        if page and hasattr(page, "route"):
-            return True
-        # Check for crawler_strategy attribute (indicates browser-based crawler)
-        if hasattr(crawler, "crawler_strategy"):
-            strategy = getattr(crawler, "crawler_strategy", None)
-            # HTTP strategies don't support Playwright
-            if strategy and "HTTP" not in str(type(strategy).__name__):
-                return True
-        return False
-
-    async def _enable_resource_blocking(self, crawler: Any) -> None:
-        """
-        Best-effort request interception to block heavy resources via Playwright
-        if accessible.
-
-        Tries to access underlying Page/Context to route requests and abort
-        resource types
-        like images/media/fonts/stylesheet and common ad/analytics URLs.
-        No-op if unsupported.
-        """
-        try:
-            # Try common attributes for context or page
-            context = None
-            for attr in ("context", "_context", "browser_context"):
-                context = getattr(crawler, attr, None)
-                if context:
-                    break
-            if context and hasattr(context, "route"):
-                await context.route("**/*", self._route_handler)
-                return
-
-            page = getattr(crawler, "page", None) or getattr(crawler, "_page", None)
-            if page and hasattr(page, "route"):
-                await page.route("**/*", self._route_handler)
-        except Exception:
-            return
-
-    async def _route_handler(self, route, request) -> None:  # type: ignore[no-redef]
-        try:
-            rtype = getattr(request, "resource_type", "")
-            url = getattr(request, "url", "") or ""
-            if rtype in {"image", "media", "font", "stylesheet"} or any(
-                bad in url
-                for bad in (
-                    "/ads",
-                    "googletagmanager",
-                    "doubleclick",
-                    "facebook",
-                    "pixel",
-                )
-            ):
-                try:
-                    await route.abort()
-                except Exception:
-                    await route.continue_()
-            else:
-                await route.continue_()
-        except Exception:
-            import contextlib
-
-            with contextlib.suppress(Exception):
-                await route.continue_()
 
     async def crawl_batched(
         self,
@@ -779,8 +401,6 @@ class ParallelEngine:
         # config governs JS.
         js_mode = False
 
-        from contextlib import suppress
-
         with suppress(Exception):
             batch_config.delay_before_return_html = (
                 max(current_delay, 3.0) if js_mode else max(current_delay, 0.5)
@@ -794,11 +414,7 @@ class ParallelEngine:
         return batch_config
 
     def _clone_config(self, config: CrawlerRunConfig) -> CrawlerRunConfig:
-        """Create a cautious copy of crawler configuration.
-
-        Only copies stable fields to avoid regressions across Crawl4AI versions.
-        Content filtering remains disabled by construction in the generator.
-        """
+        """Create a safe copy of crawler configuration using only documented fields."""
         try:
             excluded = (
                 config.excluded_tags.copy()
@@ -808,6 +424,7 @@ class ParallelEngine:
         except Exception:
             excluded = []
 
+        # Core documented fields safe to copy to constructor
         rc = CrawlerRunConfig(
             markdown_generator=getattr(config, "markdown_generator", None),
             excluded_tags=excluded,
@@ -818,25 +435,23 @@ class ParallelEngine:
             page_timeout=getattr(config, "page_timeout", 30000),
         )
 
-        for name in (
-            "only_text",
-            "exclude_social_media_links",
-            "process_iframes",
-            "remove_overlay_elements",
+        # Crawl4AI-documented stable fields safe to copy via setattr
+        documented_fields = [
             "delay_before_return_html",
-            # Crawl4AI-documented readiness/interaction fields
-            "wait_for",
-            "js_code",
-        ):
+            "wait_for",  # CSS/JS selectors for readiness
+            "js_code",  # JavaScript code execution
+            "process_iframes",  # Process iframe content
+            "css_selector",  # CSS selector for content
+            "stream",  # Enable streaming mode
+        ]
+
+        # Copy documented fields
+        for name in documented_fields:
             try:
                 if hasattr(config, name):
                     setattr(rc, name, getattr(config, name))
-            except Exception:
-                pass
-
-        if hasattr(rc, "verbose"):
-            with suppress(Exception):
-                rc.verbose = False
+            except Exception as e:
+                self.logger.debug(f"Failed to copy documented field {name}: {e}")
 
         return rc
 

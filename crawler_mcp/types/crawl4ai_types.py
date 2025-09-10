@@ -82,23 +82,6 @@ class BrowserConfig(Protocol):
     ) -> None: ...
 
 
-class CrawlerRunConfig(Protocol):
-    """Protocol for crawl4ai CrawlerRunConfig.
-
-    .. deprecated:: 0.2.0
-       Use CrawlerRunConfigAdvanced instead for better type safety.
-    """
-
-    def __init__(
-        self,
-        deep_crawl_strategy: Any | None = None,
-        stream: bool = False,
-        cache_mode: Any | None = None,
-        page_timeout: float | None = None,
-        **kwargs: Any,
-    ) -> None: ...
-
-
 # Strategy protocols for content filtering and markdown generation
 @runtime_checkable
 class ContentFilterStrategy(Protocol):
@@ -264,11 +247,11 @@ MarkdownGenerationResultImpl: type[MarkdownGenerationResult] | None
 # For actual runtime usage, we just cast the imports to our protocols
 # This maintains type safety while allowing runtime flexibility
 try:
-    from crawl4ai.content_filter_strategy import (
-        PruningContentFilter as _PruningContentFilter,  # type: ignore
-    )
-    from crawl4ai.markdown_generation_strategy import (
+    from crawl4ai import (
         DefaultMarkdownGenerator as _DefaultMarkdownGenerator,  # type: ignore
+    )
+    from crawl4ai import (
+        PruningContentFilter as _PruningContentFilter,  # type: ignore
     )
     from crawl4ai.models import (
         MarkdownGenerationResult as _MarkdownGenerationResult,  # type: ignore
@@ -300,7 +283,6 @@ __all__ = [
     "Crawl4aiCrawlResult",
     "Crawl4aiMarkdownResult",
     "Crawl4aiResult",
-    "CrawlerRunConfig",
     "CrawlerRunConfigAdvanced",
     "DeepCrawlStrategy",
     "DefaultMarkdownGenerator",

@@ -24,7 +24,7 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-from crawler_mcp import OptimizedCrawlerStrategy
+from crawler_mcp import CrawlOrchestrator
 from crawler_mcp.optimized_config import OptimizedConfig
 from crawler_mcp.utils.log_manager import LogManager
 from crawler_mcp.utils.output_manager import OutputManager
@@ -454,10 +454,9 @@ async def _run(args: argparse.Namespace) -> int:
         cfg.enable_cache = False
 
     if args.javascript is not None:
-        cfg.javascript_enabled = bool(args.javascript)
+        cfg.browser_mode = "full" if bool(args.javascript) else "text"
 
-    if args.no_js_retry:
-        cfg.js_retry_enabled = False
+    # JS retry removed - using browser_mode configuration instead
 
     # Embeddings configuration
     if args.embeddings is not None:
@@ -827,7 +826,7 @@ async def _run(args: argparse.Namespace) -> int:
     crawl_logger.info(f"Output directory: {args.output_dir}")
     crawl_logger.info(f"Domain: {domain}")
 
-    strat = OptimizedCrawlerStrategy(cfg)
+    strat = CrawlOrchestrator(cfg)
 
     # Optional: human-friendly per-page logs via monitoring hooks
     if args.per_page_log or show_progress:

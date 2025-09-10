@@ -43,9 +43,6 @@ class OptimizedConfig:
     sitemap_timeout_seconds: int = 15
     """Timeout for individual sitemap fetch operations"""
 
-    sitemap_retry_count: int = 2
-    """Number of retry attempts for failed sitemap fetches"""
-
     sitemap_user_agent: str = "Mozilla/5.0 (compatible; OptimizedCrawler/1.0)"
     """User agent string for sitemap requests"""
 
@@ -90,14 +87,13 @@ class OptimizedConfig:
     text_mode: bool = True
     """Disable image loading for maximum crawling speed"""
 
-    javascript_enabled: bool = (
-        True  # Changed default to True for better modern web support
-    )
-    """Enable JavaScript execution (necessary for modern web apps and documentation sites)"""
-
-    # Retry behavior
-    js_retry_enabled: bool = True
-    """Retry failed URLs once with JavaScript enabled to recover JS-heavy pages"""
+    browser_mode: Literal["full", "text", "minimal"] = "full"
+    """
+    Browser mode for crawling:
+    - 'full': Standard browser with all features (JS enabled)
+    - 'text': Text-only mode (lightweight, no JS/images)
+    - 'minimal': Most aggressive resource blocking
+    """
 
     # Behavior Configuration (User Requested)
     check_robots_txt: bool = False
@@ -220,35 +216,6 @@ class OptimizedConfig:
     content_validation: bool = True
     """Enable content quality validation"""
 
-    # Placeholder Recovery (bounded retry)
-    placeholder_retry_enabled: bool = True
-    """Enable selective retry for pages flagged as placeholder/low-quality"""
-
-    placeholder_retry_attempts: int = 1
-    """Max retry attempts per affected URL (sequential)"""
-
-    placeholder_retry_with_js: bool = True
-    """Force JavaScript rendering during retry to improve extraction"""
-
-    placeholder_retry_timeout_ms: int = 15000
-    """Per-page timeout (ms) for retry pass"""
-
-    # Fallback link discovery when sitemaps are missing
-    fallback_link_discovery: bool = True
-    """If true, when sitemap discovery yields too few URLs, expand from in-page links."""
-
-    fallback_max_links: int = 200
-    """Max number of links to add in fallback expansion."""
-
-    fallback_require_js: bool = True
-    """Use JS-enabled browser for fallback expansion to handle dynamic nav/docs sites."""
-
-    fallback_min_quality_ratio: float = 0.1
-    """Minimum ratio of quality URLs to trigger fallback (0.1 = 10%)"""
-
-    fallback_absolute_minimum: int = 3
-    """Absolute minimum quality URLs needed to avoid fallback"""
-
     # Language filtering
     allowed_locales: list[str] = field(default_factory=lambda: ["en"])
     """Restrict crawling to these locale prefixes (e.g., ['en']). Empty = no filter.
@@ -294,24 +261,7 @@ class OptimizedConfig:
     auto_cleanup: bool = True
     """Enable automatic cleanup when size limits are exceeded"""
 
-    # Route interception (manual) — prefer Crawl4AI text_mode/light strategies.
-    # This is disabled by default to align with upstream patterns.
-    use_manual_route_blocking: bool = False
-    """If true, enable manual Playwright routing to block resources (legacy)."""
-
-    # Live crawling monitor (Crawl4AI CrawlerMonitor)
-    enable_crawler_monitor: bool = False
-    """Enable Crawl4AI's live CrawlerMonitor visualization and metrics"""
-
-    crawler_monitor_mode: Literal["DETAILED", "AGGREGATED"] = "AGGREGATED"
-    """Display mode: 'DETAILED' or 'AGGREGATED'"""
-
-    crawler_monitor_max_visible_rows: int = 15
-    """Max rows to display in monitor (terminal UI)"""
-
-    # Prefer HTTP-only strategy when JS is not required
-    use_http_strategy_when_no_js: bool = True
-    """If true, use Crawl4AI's HTTP strategy when JavaScript is disabled."""
+    # All compatibility flags removed - using only documented Crawl4AI APIs
 
     @classmethod
     def from_env(cls, prefix: str = "OPTIMIZED_CRAWLER_") -> "OptimizedConfig":
@@ -337,8 +287,7 @@ class OptimizedConfig:
             "discovery_timeout": "DISCOVERY_TIMEOUT",
             "browser_headless": "HEADLESS",
             "text_mode": "TEXT_MODE",
-            "javascript_enabled": "JAVASCRIPT",
-            "js_retry_enabled": "JS_RETRY_ENABLED",
+            "browser_mode": "BROWSER_MODE",
             "enable_cache": "ENABLE_CACHE",
             "use_aggressive_mode": "AGGRESSIVE_MODE",
             "stealth_mode": "STEALTH_MODE",
@@ -380,10 +329,7 @@ class OptimizedConfig:
             "sitemap_accept_compressed": "SITEMAP_ACCEPT_COMPRESSED",
             "sitemap_max_redirects": "SITEMAP_MAX_REDIRECTS",
             "sitemap_timeout_seconds": "SITEMAP_TIMEOUT_SECONDS",
-            "sitemap_retry_count": "SITEMAP_RETRY_COUNT",
             "sitemap_user_agent": "SITEMAP_USER_AGENT",
-            "fallback_min_quality_ratio": "FALLBACK_MIN_QUALITY_RATIO",
-            "fallback_absolute_minimum": "FALLBACK_ABSOLUTE_MIN",
             # Output Management
             "output_dir": "OUTPUT_DIR",
             "max_domain_backups": "MAX_DOMAIN_BACKUPS",
@@ -392,17 +338,11 @@ class OptimizedConfig:
             "log_rotation_backups": "LOG_ROTATION_BACKUPS",
             "cache_retention_hours": "CACHE_RETENTION_HOURS",
             "auto_cleanup": "AUTO_CLEANUP",
-            # Placeholder recovery
-            "placeholder_retry_enabled": "PLACEHOLDER_RETRY_ENABLED",
-            "placeholder_retry_attempts": "PLACEHOLDER_RETRY_ATTEMPTS",
-            "placeholder_retry_with_js": "PLACEHOLDER_RETRY_WITH_JS",
-            "placeholder_retry_timeout_ms": "PLACEHOLDER_RETRY_TIMEOUT_MS",
             # Monitor & strategy preferences
             "enable_crawler_monitor": "ENABLE_CRAWLER_MONITOR",
             "crawler_monitor_mode": "CRAWLER_MONITOR_MODE",
             "crawler_monitor_max_visible_rows": "CRAWLER_MONITOR_MAX_VISIBLE_ROWS",
             "use_http_strategy_when_no_js": "USE_HTTP_STRATEGY_WHEN_NO_JS",
-            "use_manual_route_blocking": "USE_MANUAL_ROUTE_BLOCKING",
         }
 
         # Load configuration from environment

@@ -1,8 +1,8 @@
 """
-Main orchestrator strategy for optimized high-performance web crawler.
+Main orchestrator for optimized high-performance web crawler.
 
-This module implements the main crawler strategy that inherits from Crawl4AI's
-AsyncCrawlerStrategy and orchestrates all components for maximum performance.
+This module implements the main crawler orchestrator that uses Crawl4AI's public APIs
+to coordinate all components for maximum performance.
 """
 
 import asyncio
@@ -16,9 +16,7 @@ from collections.abc import Callable
 from datetime import datetime
 from enum import Enum
 from typing import Any, Protocol, runtime_checkable
-from urllib.parse import urlparse
 
-from crawl4ai.async_crawler_strategy import AsyncCrawlerStrategy
 from crawl4ai.models import AsyncCrawlResponse
 
 from crawler_mcp.clients.github_client import GitHubClient
@@ -32,8 +30,8 @@ from crawler_mcp.factories.dispatcher_factory import DispatcherFactory
 from crawler_mcp.models.crawl import PageContent
 from crawler_mcp.models.responses import OptimizedCrawlResponse
 from crawler_mcp.optimized_config import OptimizedConfig
+from crawler_mcp.processing.crawl4ai_discovery import URLDiscoveryAdapter
 from crawler_mcp.processing.result_converter import ResultConverter
-from crawler_mcp.processing.url_discovery import URLDiscovery
 from crawler_mcp.utils.monitoring import PerformanceMonitor
 
 
@@ -45,28 +43,27 @@ class CrawlerMonitorProto(Protocol):
     max_visible_rows: int | None
 
 
-class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
+class CrawlOrchestrator:
     """
-    High-performance web crawler strategy using Crawl4AI patterns.
+    High-performance web crawler orchestrator using Crawl4AI's public APIs.
 
-    This strategy inherits from AsyncCrawlerStrategy to be compatible with
-    the Crawl4AI ecosystem while providing enhanced performance and features.
+    This orchestrator uses only documented Crawl4AI APIs to provide
+    enhanced performance and features without relying on internal implementations.
     """
 
     def __init__(self, config: OptimizedConfig = None):
         """
-        Initialize optimized crawler strategy.
+        Initialize crawler orchestrator.
 
         Args:
             config: Optional configuration (defaults to OptimizedConfig())
         """
-        super().__init__()
 
         self.config = config or OptimizedConfig()
         self.logger = logging.getLogger(__name__)
 
         # Initialize all components
-        self.url_discovery = URLDiscovery(self.config)
+        self.url_discovery = URLDiscoveryAdapter(self.config)
         self.browser_factory = BrowserFactory(self.config)
         self.content_extractor = ContentExtractorFactory(self.config)
         self.dispatcher_factory = DispatcherFactory(self.config)
@@ -82,9 +79,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         self._last_pr_report: dict[str, Any] | None = None
         self._last_pages: list[Any] = []  # Initialize to prevent AttributeError
 
-        self.logger.info(
-            f"Initialized OptimizedCrawlerStrategy with config: {self.config}"
-        )
+        self.logger.info(f"Initialized CrawlOrchestrator with config: {self.config}")
 
         # Log embeddings and Qdrant configuration with dependency info
         embeddings_will_run = (
@@ -113,11 +108,11 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
 
     async def crawl(self, url: str, **kwargs) -> OptimizedCrawlResponse:
         """
-        Main crawl method required by AsyncCrawlerStrategy.
+        Main crawl method using Crawl4AI's public APIs.
 
         This method implements the complete optimized crawling pipeline:
-        1. URL Discovery from sitemaps
-        2. Parallel crawling with arun_many()
+        1. URL Discovery using BFSDeepCrawlStrategy
+        2. Parallel crawling with AsyncWebCrawler.arun_many()
         3. Content validation and conversion
         4. Performance monitoring
 
@@ -126,7 +121,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
             **kwargs: Additional crawling parameters
 
         Returns:
-            AsyncCrawlResponse compatible with Crawl4AI
+            OptimizedCrawlResponse with crawl results
         """
         start_time = time.time()
 
@@ -223,7 +218,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         """
         Initialize crawler resources.
 
-        This method is called by Crawl4AI to initialize the strategy.
+        Sets up URL discovery and other components needed for crawling.
         """
         if self._session_active:
             return
@@ -245,7 +240,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         """
         Clean up crawler resources.
 
-        This method is called by Crawl4AI to clean up the strategy.
+        Closes URL discovery and other components after crawling.
         """
         if not self._session_active:
             return
@@ -288,149 +283,10 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
             List of discovered URLs
         """
         try:
-            # Ensure URL discovery is ready
-            if (
-                not hasattr(self.url_discovery, "_session")
-                or self.url_discovery._session is None
-            ):
-                await self.url_discovery._ensure_session()
-
             # Discover URLs
             discovered_urls = await self.url_discovery.discover_all(start_url, max_urls)
 
             self.logger.info(f"Discovered {len(discovered_urls)} URLs from {start_url}")
-
-            # Enhanced fallback: trigger if sitemap discovery yields too few quality URLs
-            fallback_threshold = self._calculate_fallback_threshold(max_urls)
-            quality_urls = self._assess_url_quality(discovered_urls, start_url)
-
-            should_trigger_fallback = (
-                getattr(self.config, "fallback_link_discovery", True)
-                and quality_urls < fallback_threshold
-                and max_urls > 1
-            )
-
-            if should_trigger_fallback:
-                self.logger.info(
-                    f"🔄 Triggering fallback discovery: found {quality_urls}/{len(discovered_urls)} quality URLs "
-                    f"(threshold: {fallback_threshold})"
-                )
-                try:
-                    # Build a small JS-enabled fetch to extract internal links from the start page
-                    from urllib.parse import urljoin, urlparse
-
-                    js_needed = bool(getattr(self.config, "fallback_require_js", True))
-                    fb_browser = self._choose_fallback_browser(js_needed)
-
-                    fb_run_cfg = self.content_extractor.create_crawler_config()
-                    if hasattr(fb_run_cfg, "delay_before_return_html"):
-                        # Ensure adequate delay when JS is enabled during fallback expansion
-                        try:
-                            cur = float(
-                                getattr(fb_run_cfg, "delay_before_return_html", 0.0)
-                            )
-                        except Exception:
-                            cur = 0.0
-                        fb_run_cfg.delay_before_return_html = max(
-                            self._fallback_delay(js_needed), cur
-                        )
-
-                    # Single fetch
-                    first = await self.parallel_engine.crawl_batch_raw(
-                        [start_url], fb_browser, fb_run_cfg, None
-                    )
-                    if first:
-                        r = first[0]
-                        base_host = urlparse(start_url).netloc
-                        # Use the same link extraction logic as reporting to avoid schema mismatches
-                        try:
-                            candidates = self.result_converter._extract_links(r)  # type: ignore[arg-type]
-                        except Exception:
-                            links = getattr(r, "links", None)
-                            candidates = []
-                            if isinstance(links, dict):
-                                candidates = list(links.get("internal", []) or [])
-                            elif isinstance(links, list):
-                                candidates = links[:]
-                        # Normalize and filter to same host
-                        out: list[str] = []
-                        seen: set[str] = {start_url}
-                        for lk in candidates:
-                            try:
-                                pu = urlparse(lk)
-                                if not pu.netloc:
-                                    abs_url = urljoin(start_url, lk)
-                                else:
-                                    abs_url = lk
-                                # Locale filtering if configured
-                                ok_locale = True
-                                allowed_locales = [
-                                    s.lower()
-                                    for s in (
-                                        getattr(self.config, "allowed_locales", [])
-                                        or []
-                                    )
-                                ]
-                                if allowed_locales:
-                                    p = urlparse(abs_url)
-                                    segs = [s for s in p.path.split("/") if s]
-                                    loc = segs[0].lower() if segs else ""
-                                    if not loc:
-                                        ok_locale = ("" in allowed_locales) or (
-                                            "en" in allowed_locales
-                                        )
-                                    else:
-                                        ok_locale = (loc in allowed_locales) or any(
-                                            a and (loc == a or loc.startswith(a + "-"))
-                                            for a in allowed_locales
-                                        )
-                                if (
-                                    urlparse(abs_url).netloc == base_host
-                                    and ok_locale
-                                    and abs_url not in seen
-                                ):
-                                    seen.add(abs_url)
-                                    out.append(abs_url)
-                            except Exception:
-                                continue
-                        # Apply budget and deduplicate (normalize trailing slash)
-                        budget = max(
-                            1, int(getattr(self.config, "fallback_max_links", 200))
-                        )
-                        candidates = [start_url, *out[: min(budget, max_urls - 1)]]
-
-                        # dedupe with normalization
-                        def _norm(u: str) -> str:
-                            try:
-                                pu = urlparse(u)
-                                path = pu.path or "/"
-                                if not path.endswith("/") and "." not in (
-                                    path.split("/")[-1] or ""
-                                ):
-                                    path = path + "/"
-                                return urljoin(f"{pu.scheme}://{pu.netloc}", path)
-                            except Exception:
-                                return u
-
-                        seen_norm: set[str] = set()
-                        expanded: list[str] = []
-                        for u in candidates:
-                            nu = _norm(u)
-                            if nu not in seen_norm:
-                                seen_norm.add(nu)
-                                expanded.append(nu)
-                        if len(expanded) > len(discovered_urls):
-                            original_count = len(discovered_urls)
-                            discovered_urls = expanded
-                            self.logger.info(
-                                f"🔄 Fallback discovery: {original_count} → {len(expanded)} URLs (+{len(expanded) - original_count} internal links)"
-                            )
-                        else:
-                            self.logger.warning(
-                                "🚫 Fallback discovery didn't improve URL count"
-                            )
-                except Exception as e:
-                    self.logger.warning(f"⚠️ Fallback URL discovery failed: {e}")
 
             # Trigger monitoring hook
             await self.monitor.trigger_hook(
@@ -442,82 +298,6 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         except Exception as e:
             self.logger.error(f"URL discovery failed for {start_url}: {e}")
             return [start_url]  # Fallback to original URL
-
-    def _choose_fallback_browser(self, js_needed: bool):
-        """Choose appropriate browser configuration for fallback operations."""
-        return (
-            self.browser_factory.create_javascript_config()
-            if js_needed
-            else self.browser_factory.get_recommended_config()
-        )
-
-    def _fallback_delay(self, js_needed: bool) -> float:
-        """Return appropriate delay for fallback operations based on JS requirements."""
-        return 3.0 if js_needed else 0.5
-
-    def _calculate_fallback_threshold(self, max_urls: int) -> int:
-        """Calculate minimum URLs needed before triggering fallback discovery."""
-        # Use configured ratio and absolute minimum
-        ratio = getattr(self.config, "fallback_min_quality_ratio", 0.1)
-        absolute_min = getattr(self.config, "fallback_absolute_minimum", 3)
-
-        # Calculate threshold based on configuration
-        ratio_based = max(1, int(max_urls * ratio))
-        return max(absolute_min, ratio_based)
-
-    def _assess_url_quality(self, urls: list[str], start_url: str) -> int:
-        """Assess the quality of discovered URLs and return count of quality URLs."""
-        if not urls:
-            return 0
-
-        quality_count = 0
-        start_domain = urlparse(start_url).netloc
-
-        for url in urls:
-            try:
-                parsed = urlparse(url)
-
-                # Must be same domain
-                if parsed.netloc != start_domain:
-                    continue
-
-                # Skip if it's just the homepage
-                if url == start_url or parsed.path in ("/", "/index.html", "/home"):
-                    continue
-
-                # Skip obvious non-content URLs
-                path_lower = parsed.path.lower()
-                if any(
-                    skip in path_lower
-                    for skip in [
-                        "/api/",
-                        "/admin/",
-                        "/login/",
-                        "/logout/",
-                        "/register/",
-                        "/search/",
-                        "/contact/",
-                        "/privacy/",
-                        "/terms/",
-                        ".css",
-                        ".js",
-                        ".xml",
-                        ".txt",
-                        ".json",
-                    ]
-                ):
-                    continue
-
-                # Count as quality URL
-                quality_count += 1
-
-            except Exception:
-                continue
-
-        self.logger.debug(
-            f"🔍 Quality assessment: {quality_count}/{len(urls)} URLs are quality content"
-        )
-        return quality_count
 
     async def _setup_infrastructure(self, max_concurrent: int) -> tuple:
         """
@@ -590,14 +370,13 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                 ):
                     results.append(r)
             elif self.config.use_aggressive_mode:
-                # Use retry logic for aggressive mode
-                results = await self.parallel_engine.crawl_with_retry(
+                # Use standard crawling for aggressive mode
+                results = await self.parallel_engine.crawl_batch(
                     urls,
                     browser_config,
                     crawler_config,
                     dispatcher,
                     monitor=self.monitor,
-                    max_retries=1,  # Limited retries for speed
                 )
             else:
                 # Standard parallel crawl
@@ -612,56 +391,11 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         except Exception as e:
             # Handle memory pressure or dispatcher exceptions
             self.logger.warning(f"Memory pressure handling kicked in during crawl: {e}")
-            # Fall back to reduced concurrency crawling
-            try:
-                # Create a conservative dispatcher for fallback
-                fallback_dispatcher = (
-                    self.dispatcher_factory.create_conservative_dispatcher(
-                        max_concurrent=2
-                    )
-                )
-                self.logger.info(
-                    "Falling back to conservative crawling due to memory pressure"
-                )
+            # Memory pressure - return empty results
+            self.logger.error("Memory pressure too high, skipping crawl")
+            results = []
 
-                results = await self.parallel_engine.crawl_batch(
-                    urls,
-                    browser_config,
-                    crawler_config,
-                    fallback_dispatcher,
-                    monitor=self.monitor,
-                    progress_callback=progress_callback,
-                )
-            except Exception as fallback_e:
-                self.logger.error(f"Fallback crawling also failed: {fallback_e}")
-                # Return empty results rather than crashing
-                results = []
-
-        # Optional JS-only retry for failed URLs to recover JS-heavy pages
-        try:
-            successful_urls = {getattr(r, "url", "") for r in results}
-            failed_urls = [u for u in urls if u not in successful_urls]
-            # Only retry if there are failures and default config is JS-disabled
-            if (
-                failed_urls
-                and not self.config.javascript_enabled
-                and getattr(self.config, "js_retry_enabled", True)
-            ):
-                self.logger.info(
-                    f"Retrying {len(failed_urls)} URLs with JavaScript enabled"
-                )
-                js_browser_config = self.browser_factory.create_javascript_config()
-                js_results = await self.parallel_engine.crawl_batch(
-                    failed_urls,
-                    js_browser_config,
-                    crawler_config,  # keep run settings minimal; engine uses None internally
-                    dispatcher,
-                    monitor=self.monitor,
-                    progress_callback=progress_callback,
-                )
-                results.extend(js_results)
-        except Exception as e:
-            self.logger.warning(f"JS retry pass skipped due to error: {e}")
+        # JS retry logic removed - using browser_mode configuration instead
 
         # Record results in monitoring
         for result in results:
@@ -697,131 +431,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         except Exception:
             pass
 
-        # Fallback: if discovery produced too few URLs, expand from in-page links
-        try:
-            if (
-                getattr(self.config, "fallback_link_discovery", True)
-                and len(results) <= 2
-                and len(urls) <= 2
-            ):
-                # Collect internal links from successful pages
-                from urllib.parse import urljoin, urlparse
-
-                base_host = urlparse(urls[0]).netloc if urls else ""
-                base_root = f"{urlparse(urls[0]).scheme}://{base_host}" if urls else ""
-                link_pool: list[str] = []
-                seen: set[str] = set(urls)
-                for r in results:
-                    if getattr(r, "success", False):
-                        try:
-                            links = getattr(r, "links", None)
-                            if isinstance(links, dict):
-                                candidates = links.get("internal", []) or []
-                            else:
-                                candidates = links or []
-                            for lk in candidates:
-                                try:
-                                    pu = urlparse(lk)
-                                    # Treat relative URLs as internal; resolve against page URL or site root
-                                    if not pu.netloc:
-                                        abs_url = urljoin(
-                                            getattr(r, "url", base_root) or base_root,
-                                            lk,
-                                        )
-                                        if abs_url and abs_url not in seen:
-                                            seen.add(abs_url)
-                                            link_pool.append(abs_url)
-                                    elif pu.netloc == base_host:
-                                        if lk not in seen:
-                                            seen.add(lk)
-                                            link_pool.append(lk)
-                                except Exception:
-                                    continue
-                        except Exception:
-                            continue
-
-                if link_pool:
-                    # Limit to fallback budget and avoid duplicates
-                    budget = max(
-                        1, int(getattr(self.config, "fallback_max_links", 200))
-                    )
-                    to_crawl = link_pool[:budget]
-                    self.logger.info(
-                        f"Fallback link discovery: scheduling {len(to_crawl)} internal links"
-                    )
-                    # Choose JS-enabled browser if requested, as docs/nav often require it
-                    js_needed = (not self.config.javascript_enabled) and bool(
-                        getattr(self.config, "fallback_require_js", True)
-                    )
-                    fb_browser = (
-                        self._choose_fallback_browser(js_needed)
-                        if js_needed
-                        else browser_config
-                    )
-                    # Use a JS-friendly run config for fallback to handle SPA/docs navigation
-                    try:
-                        fb_run_cfg = self.content_extractor.create_crawler_config()
-                        if hasattr(fb_run_cfg, "delay_before_return_html"):
-                            try:
-                                cur = float(
-                                    getattr(fb_run_cfg, "delay_before_return_html", 0.0)
-                                )
-                            except Exception:
-                                cur = 0.0
-                            # Assume JS mode for fallback pass when requested
-                            fb_run_cfg.delay_before_return_html = max(
-                                self._fallback_delay(
-                                    bool(
-                                        getattr(
-                                            self.config, "fallback_require_js", True
-                                        )
-                                    )
-                                ),
-                                cur,
-                            )
-                        if hasattr(fb_run_cfg, "process_iframes"):
-                            fb_run_cfg.process_iframes = False
-                        if hasattr(fb_run_cfg, "only_text"):
-                            fb_run_cfg.only_text = True
-                    except Exception:
-                        fb_run_cfg = crawler_config
-
-                    fb_results = await self.parallel_engine.crawl_batch(
-                        to_crawl,
-                        fb_browser,
-                        fb_run_cfg,
-                        dispatcher,
-                        monitor=self.monitor,
-                        progress_callback=progress_callback,
-                    )
-                    # Append and record
-                    for fr in fb_results:
-                        results.append(fr)
-                        if getattr(fr, "success", False):
-                            try:
-                                content_text = (
-                                    self.result_converter._extract_markdown_content(fr)
-                                )
-                                content_length = len(content_text)
-                                crawl_time = getattr(fr, "crawl_time", 0.0)
-                                self.monitor.record_page_success(
-                                    fr.url, content_length, crawl_time
-                                )
-                                qs = min(1.0, max(0.0, content_length / 5000.0))
-                                is_dup = self.monitor.record_content_hash(
-                                    fr.url, content_text
-                                )
-                                self.monitor.record_content_validation(
-                                    fr.url, qs, is_duplicate=is_dup
-                                )
-                            except Exception:
-                                pass
-                        else:
-                            self.monitor.record_page_failure(
-                                fr.url, getattr(fr, "error", "failed")
-                            )
-        except Exception as e:
-            self.logger.debug(f"Fallback link discovery skipped due to error: {e}")
+        # Fallback logic removed - rely on BFSDeepCrawlStrategy for comprehensive discovery
 
         # Follow internal links BFS pass (bounded), useful when sitemaps are minimal
         try:
@@ -908,11 +518,6 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
                         f"Follow-internal pass: scheduling {len(link_set)} internal links"
                     )
                     fb_browser = browser_config
-                    if not self.config.javascript_enabled:
-                        import contextlib
-
-                        with contextlib.suppress(Exception):
-                            fb_browser = self.browser_factory.create_javascript_config()
                     fb_results = await self.parallel_engine.crawl_batch(
                         link_set,
                         fb_browser,
@@ -1541,11 +1146,15 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
             ),
         )
 
+        # Minimum characters per batch to ensure efficient processing
+        min_chars = int(getattr(self.config, "tei_min_chars_per_batch", 4000) or 4000)
+
         # Use shared batching utility to pack texts optimally
         text_batches = pack_texts_into_batches(
             texts,
             target_chars=target_chars,
             max_items=max_items,
+            min_chars=min_chars,  # Now properly using the min_chars parameter
             parallel_workers=parallel,
         )
 
@@ -1907,7 +1516,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
         self.config = new_config
 
         # Reinitialize components with new config
-        self.url_discovery = URLDiscovery(self.config)
+        self.url_discovery = URLDiscoveryAdapter(self.config)
         self.browser_factory = BrowserFactory(self.config)
         self.content_extractor = ContentExtractorFactory(self.config)
         self.dispatcher_factory = DispatcherFactory(self.config)
@@ -1985,7 +1594,7 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
     def __str__(self) -> str:
         """String representation of the strategy"""
         return (
-            f"OptimizedCrawlerStrategy("
+            f"CrawlOrchestrator("
             f"concurrent={self.config.max_concurrent_crawls}, "
             f"max_urls={self.config.max_urls_to_discover}, "
             f"active={self._session_active})"
@@ -1994,6 +1603,6 @@ class OptimizedCrawlerStrategy(AsyncCrawlerStrategy):
     def __repr__(self) -> str:
         """Detailed representation of the strategy"""
         return (
-            f"OptimizedCrawlerStrategy(config={self.config}, "
+            f"CrawlOrchestrator(config={self.config}, "
             f"session_active={self._session_active})"
         )

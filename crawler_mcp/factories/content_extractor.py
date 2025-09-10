@@ -5,8 +5,12 @@ This module provides factory methods for creating content extraction configurati
 that prevent hash placeholders and ensure high-quality markdown content extraction.
 """
 
-from crawl4ai import CacheMode, CrawlerRunConfig, DefaultMarkdownGenerator
-from crawl4ai.content_filter_strategy import PruningContentFilter
+from crawl4ai import (
+    CacheMode,
+    CrawlerRunConfig,
+    DefaultMarkdownGenerator,
+    PruningContentFilter,
+)
 
 from crawler_mcp.optimized_config import OptimizedConfig
 
@@ -169,7 +173,6 @@ class ContentExtractorFactory:
             excluded_tags=excluded_tags,
             # Link handling
             exclude_external_links=True,  # Focus on domain content
-            exclude_social_media_links=True,  # Remove social media noise
             # Performance and caching
             cache_mode=CacheMode.ENABLED
             if self.config.enable_cache
@@ -177,28 +180,10 @@ class ContentExtractorFactory:
             check_robots_txt=check_robots,
             # Content quality thresholds
             word_count_threshold=self.config.min_word_count,
-            # Page processing optimizations
-            remove_overlay_elements=True,  # Remove popups and overlays
-            process_iframes=False,  # Skip iframes for performance
-            # Timing optimizations - improved for JavaScript sites
+            # Timing optimizations
             page_timeout=self.config.page_timeout,
-            delay_before_return_html=2.0,  # Increased delay for JS content loading
-            # Additional optimizations
-            only_text=self.config.text_mode,  # Text-only mode for speed
-            verbose=False,  # Disable verbose output for performance
+            delay_before_return_html=2.0,  # Delay for content loading
         )
-
-        # If JavaScript-heavy sites are expected, prefer longer delay or caller-provided
-        # `wait_for` conditions rather than undocumented flags.
-        if getattr(self.config, "javascript_enabled", False) and hasattr(
-            rc, "delay_before_return_html"
-        ):
-            try:
-                cur = float(getattr(rc, "delay_before_return_html", 0.0))
-            except (TypeError, ValueError):
-                cur = 0.0
-            # setattr avoids mypy attr-defined complaints against 3rd-party types
-            rc.delay_before_return_html = max(3.0, cur)
 
         return rc
 
@@ -225,11 +210,8 @@ class ContentExtractorFactory:
             cache_mode=CacheMode.ENABLED,
             check_robots_txt=False,  # Always ignore robots.txt
             word_count_threshold=20,  # Lower threshold for quality
-            remove_overlay_elements=True,
-            process_iframes=True,  # Process iframes for completeness
             page_timeout=60000,  # Longer timeout for quality
             delay_before_return_html=2.0,  # More time for content loading
-            verbose=False,
         )
 
     def create_speed_focused_config(self) -> CrawlerRunConfig:
@@ -264,16 +246,11 @@ class ContentExtractorFactory:
             markdown_generator=markdown_gen,
             excluded_tags=speed_excluded_tags,
             exclude_external_links=True,
-            exclude_social_media_links=True,
             cache_mode=CacheMode.ENABLED,
             check_robots_txt=False,
             word_count_threshold=self.config.min_word_count,
-            remove_overlay_elements=True,
-            process_iframes=False,
             page_timeout=15000,  # Shorter timeout
             delay_before_return_html=0.1,  # Minimal delay
-            only_text=True,  # Text-only for maximum speed
-            verbose=False,
         )
 
     def create_config_for_content_type(self, content_type: str) -> CrawlerRunConfig:
