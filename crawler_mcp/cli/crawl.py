@@ -453,7 +453,7 @@ async def _run(args: argparse.Namespace) -> int:
             {
                 "max_concurrent_crawls": max(args.concurrency, 20),
                 "memory_threshold_percent": 85,
-                "page_timeout": 15000,
+                "page_timeout": 15,  # seconds
             }
         )
 
@@ -463,7 +463,9 @@ async def _run(args: argparse.Namespace) -> int:
             {
                 "max_concurrent_crawls": max(args.concurrency, 28),
                 "memory_threshold_percent": 85,
-                "page_timeout": min(int(args.page_timeout_ms), 15000),
+                "page_timeout": min(
+                    int(args.page_timeout_ms) // 1000, 15
+                ),  # convert ms to seconds
             }
         )
 

@@ -185,11 +185,15 @@ class DeduplicationStrategy(str, Enum):
 
 
 class BrowserMode(str, Enum):
-    """Browser operation modes for crawling."""
+    """Browser operation modes for crawling.
+
+    Note: Added HEADLESS to match settings usage.
+    """
 
     FULL = "full"
     TEXT = "text"
     MINIMAL = "minimal"
+    HEADLESS = "headless"
 
 
 class CacheStrategy(str, Enum):
@@ -256,6 +260,28 @@ class EmbeddingProjection(str, Enum):
     PAD_ZERO = "pad_zero"
 
 
+class ProxyType(str, Enum):
+    """Supported proxy types for HTTP requests."""
+
+    HTTP = "http"
+    HTTPS = "https"
+    SOCKS5 = "socks5"
+    DIRECT = "direct"
+
+
+class ExtractionStrategy(str, Enum):
+    """Extraction strategies supported by the crawler.
+
+    These are high-level strategy names used by configuration. They map onto
+    concrete implementations (e.g., CSS/LLM/Cosine) in the crawl layer.
+    """
+
+    BASIC = "basic"
+    CSS = "css"
+    COSINE = "cosine"
+    LLM = "llm"
+
+
 # =============================================================================
 # DEFAULT COLLECTIONS AND LISTS
 # =============================================================================
@@ -282,61 +308,65 @@ DEFAULT_EXCLUDED_TAGS: Final[tuple[str, ...]] = (
 )
 
 # Image file extensions for validation
-IMAGE_EXTENSIONS: Final[set[str]] = {
-    ".jpg",
-    ".jpeg",
-    ".png",
-    ".gif",
-    ".webp",
-    ".svg",
-    ".bmp",
-    ".tiff",
-    ".ico",
-}
+IMAGE_EXTENSIONS: Final[frozenset[str]] = frozenset(
+    {
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".gif",
+        ".webp",
+        ".svg",
+        ".bmp",
+        ".tiff",
+        ".ico",
+    }
+)
 
 # Binary file extensions to exclude from directory crawling
-BINARY_EXTENSIONS: Final[set[str]] = {
-    # Executables and libraries
-    ".exe",
-    ".dll",
-    ".so",
-    ".dylib",
-    ".bin",
-    ".obj",
-    ".o",
-    # Archives
-    ".zip",
-    ".tar",
-    ".gz",
-    ".bz2",
-    ".7z",
-    ".rar",
-    ".xz",
-    # Media files
-    ".mp3",
-    ".mp4",
-    ".avi",
-    ".mov",
-    ".wmv",
-    ".flv",
-    ".wav",
-    ".mkv",
-    ".webm",
-    # Documents
-    ".pdf",
-    ".doc",
-    ".docx",
-    ".xls",
-    ".xlsx",
-    ".ppt",
-    ".pptx",
-    # System files
-    ".iso",
-    ".dmg",
-    ".pkg",
-    ".deb",
-    ".rpm",
-}
+BINARY_EXTENSIONS: Final[frozenset[str]] = frozenset(
+    {
+        # Executables and libraries
+        ".exe",
+        ".dll",
+        ".so",
+        ".dylib",
+        ".bin",
+        ".obj",
+        ".o",
+        # Archives
+        ".zip",
+        ".tar",
+        ".gz",
+        ".bz2",
+        ".7z",
+        ".rar",
+        ".xz",
+        # Media files
+        ".mp3",
+        ".mp4",
+        ".avi",
+        ".mov",
+        ".wmv",
+        ".flv",
+        ".wav",
+        ".mkv",
+        ".webm",
+        # Documents
+        ".pdf",
+        ".doc",
+        ".docx",
+        ".xls",
+        ".xlsx",
+        ".ppt",
+        ".pptx",
+        # System files
+        ".iso",
+        ".dmg",
+        ".pkg",
+        ".deb",
+        ".rpm",
+    }
+)
 
 # Default URL patterns to exclude during crawling
 DEFAULT_EXCLUDED_URL_PATTERNS: Final[tuple[str, ...]] = (

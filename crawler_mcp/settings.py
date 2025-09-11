@@ -127,7 +127,7 @@ class CrawlerSettings(BaseSettings):
 
     # Crawler Settings (37 settings)
     max_depth: int = Field(default=3, ge=1, le=10)
-    max_pages: int = Field(default=DEFAULT_MAX_CRAWL_PAGES, ge=1)
+    max_pages: int = Field(default=DEFAULT_MAX_CRAWL_PAGES, ge=1, alias="MAX_PAGES")
     page_timeout: int = Field(
         default=int(DEFAULT_PAGE_TIMEOUT / 1000), ge=1
     )  # Convert ms to seconds
@@ -232,8 +232,7 @@ class CrawlerSettings(BaseSettings):
     browser_downloads_path: str | None = None
     browser_ignore_https_errors: bool = True
 
-    # Crawler Orchestration Settings (14 new settings)
-    max_crawl_pages: int = Field(default=DEFAULT_MAX_CRAWL_PAGES, ge=1)
+    # Crawler Orchestration Settings (13 new settings)
     crawl_delay: float = Field(default=1.0, ge=0.0)
     respect_robots_txt: bool = False
     max_redirects: int = Field(default=5, ge=1, le=20)
@@ -301,9 +300,10 @@ class CrawlerSettings(BaseSettings):
     def validate_log_level(cls, v: str) -> str:
         # Use LogLevel enum values for validation
         valid_levels = [level.value for level in LogLevel]
-        if v.upper() not in valid_levels:
+        v_lower = v.lower()
+        if v_lower not in valid_levels:
             raise ValueError(f"Log level must be one of {valid_levels}")
-        return v.upper()
+        return v_lower
 
     @field_validator("uvicorn_log_level")
     @classmethod

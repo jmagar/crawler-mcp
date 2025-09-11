@@ -1,168 +1,91 @@
 """
-Browser configuration factory for optimized high-performance web crawler.
+Browser configuration factory for the crawler, derived from CrawlerSettings.
 
-This module provides factory methods for creating browser configurations
-using Crawl4AI's documented browser modes.
+This avoids depending on OptimizedConfig and uses the unified settings.
 """
+
+from __future__ import annotations
+
+from typing import Any
 
 from crawl4ai import BrowserConfig
 
 from crawler_mcp.constants import (
     MINIMAL_VIEWPORT_HEIGHT,
     MINIMAL_VIEWPORT_WIDTH,
+    BrowserMode,
 )
-from crawler_mcp.optimized_config import OptimizedConfig
+from crawler_mcp.settings import CrawlerSettings
 
 
 class BrowserFactory:
-    """Factory for creating optimized browser configurations using documented Crawl4AI APIs"""
+    """Factory for creating browser configurations using CrawlerSettings."""
 
-    def __init__(self, config: OptimizedConfig | None = None):
-        """
-        Initialize browser factory.
+    def __init__(
+        self, settings: CrawlerSettings, overrides: dict[str, Any] | None = None
+    ):
+        self.settings = settings
+        self.overrides = overrides or {}
 
-        Args:
-            config: Optional optimized crawler configuration
-        """
-        self.config = config or OptimizedConfig()
+    def _get(self, key: str, default: Any) -> Any:
+        return self.overrides.get(key, getattr(self.settings, key, default))
 
     def create_config(self) -> BrowserConfig:
-        """
-        Create browser configuration based on configured browser_mode.
+        mode = self._get("browser_mode", BrowserMode.HEADLESS)
+        if isinstance(mode, str):
+            # Normalize string values if any
+            try:
+                mode = BrowserMode(mode)
+            except Exception:
+                mode = BrowserMode.HEADLESS
 
-        Returns:
-            BrowserConfig appropriate for the configured mode
-        """
-        if self.config.browser_mode == "text":
+        if mode == BrowserMode.TEXT:
             return self._create_text_config()
-        elif self.config.browser_mode == "minimal":
+        if mode == BrowserMode.MINIMAL:
             return self._create_minimal_config()
-        else:  # full
-            return self._create_full_config()
+        # FULL or HEADLESS fall back to full config, honoring headless flag
+        return self._create_full_config()
 
     def get_recommended_config(self) -> BrowserConfig:
-        """
-        Get recommended browser configuration (alias for create_config).
-
-        Returns:
-            BrowserConfig appropriate for the configured mode
-        """
         return self.create_config()
 
-    def create_documentation_config(self) -> BrowserConfig:
-        """Create specialized config for documentation sites."""
-        return BrowserConfig(
-            headless=True,
-            text_mode=True,
-            browser_type="chromium",
-            viewport_width=self.config.viewport_width,
-            viewport_height=self.config.viewport_height,
-            light_mode=True,
-            java_script_enabled=False,  # Docs usually don't need JS
-            extra_args=[
-                *self.config.browser_extra_args,
-                "--disable-images",
-                "--disable-plugins",
-            ],
-        )
-
-    def create_api_config(self) -> BrowserConfig:
-        """Create specialized config for API documentation."""
-        return BrowserConfig(
-            headless=True,
-            browser_type="chromium",
-            viewport_width=self.config.viewport_width,
-            viewport_height=self.config.viewport_height,
-            light_mode=True,
-            java_script_enabled=True,  # API docs might need JS for examples
-            extra_args=self.config.browser_extra_args,
-        )
-
-    def get_config_for_url(self, url: str) -> BrowserConfig:
-        """Get optimized browser config based on URL pattern.
-
-        Args:
-            url: URL to analyze for optimal configuration
-
-        Returns:
-            BrowserConfig optimized for the detected content type
-        """
-        if not self.config.enable_url_based_optimization:
-            return self.create_config()
-
-        # Check for documentation patterns
-        for pattern in self.config.documentation_patterns or []:
-            if self._matches_pattern(url, pattern):
-                return self.create_documentation_config()
-
-        # Check for API documentation
-        if "/api/" in url.lower() or "/api-" in url.lower():
-            return self.create_api_config()
-
-        # Default to configured mode
-        return self.create_config()
-
-    def _matches_pattern(self, url: str, pattern: str) -> bool:
-        """Check if URL matches a glob-style pattern."""
-        import fnmatch
-
-        return fnmatch.fnmatch(url.lower(), pattern.lower())
+    def _base_kwargs(self) -> dict[str, Any]:
+        return {
+            "browser_type": self._get("browser_type", "chromium"),
+            "viewport_width": int(self._get("browser_width", MINIMAL_VIEWPORT_WIDTH)),
+            "viewport_height": int(
+                self._get("browser_height", MINIMAL_VIEWPORT_HEIGHT)
+            ),
+            "light_mode": True,
+            "java_script_enabled": bool(self._get("browser_js_enabled", True)),
+        }
 
     def _create_full_config(self) -> BrowserConfig:
-        """Create full-featured browser configuration with performance optimizations."""
+        # Use headless by default for WSL2 compatibility
+        headless = True  # Always headless for now
         return BrowserConfig(
-            headless=self.config.browser_headless,
-            browser_type="chromium",
-            viewport_width=self.config.viewport_width,
-            viewport_height=self.config.viewport_height,
-            light_mode=self.config.enable_light_mode,
-            java_script_enabled=self.config.enable_javascript,
-            extra_args=self.config.browser_extra_args,
+            headless=headless,
+            **self._base_kwargs(),
         )
 
     def _create_text_config(self) -> BrowserConfig:
-        """Create optimized text-only browser configuration."""
-        return BrowserConfig(
-            headless=True,
-            text_mode=True,
-            browser_type="chromium",
-            viewport_width=self.config.viewport_width,
-            viewport_height=self.config.viewport_height,
-            light_mode=True,  # Always enable for text mode
-            java_script_enabled=False,  # Disable JS for text mode
-            extra_args=[
-                *self.config.browser_extra_args,
-                "--disable-images",
-                "--disable-plugins",
-                "--disable-extensions",
-            ],
+        kwargs = self._base_kwargs()
+        kwargs.update(
+            {
+                "text_mode": True,
+                "java_script_enabled": False,
+            }
         )
+        return BrowserConfig(headless=True, **kwargs)
 
     def _create_minimal_config(self) -> BrowserConfig:
-        """Create minimal browser configuration with aggressive resource blocking."""
-        return BrowserConfig(
-            headless=True,
-            text_mode=True,
-            browser_type="chromium",
-            viewport_width=MINIMAL_VIEWPORT_WIDTH,
-            viewport_height=MINIMAL_VIEWPORT_HEIGHT,
-            light_mode=True,
-            java_script_enabled=False,
-            extra_args=[
-                *self.config.browser_extra_args,
-                "--disable-images",
-                "--disable-plugins",
-                "--disable-extensions",
-                "--disable-background-networking",
-                "--disable-background-timer-throttling",
-                "--disable-client-side-phishing-detection",
-                "--disable-default-apps",
-                "--disable-hang-monitor",
-                "--disable-popup-blocking",
-                "--disable-prompt-on-repost",
-                "--disable-sync",
-                "--disable-translate",
-                "--no-first-run",
-                "--no-default-browser-check",
-            ],
+        kwargs = self._base_kwargs()
+        kwargs.update(
+            {
+                "text_mode": True,
+                "java_script_enabled": False,
+                "viewport_width": MINIMAL_VIEWPORT_WIDTH,
+                "viewport_height": MINIMAL_VIEWPORT_HEIGHT,
+            }
         )
+        return BrowserConfig(headless=True, **kwargs)

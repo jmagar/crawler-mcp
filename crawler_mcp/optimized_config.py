@@ -105,7 +105,7 @@ class OptimizedConfig:
     """Minimum word count for valid page content"""
 
     excluded_tags: list[str] = field(
-        default_factory=lambda: DEFAULT_EXCLUDED_TAGS.copy()
+        default_factory=lambda: list(DEFAULT_EXCLUDED_TAGS)
     )
     """HTML tags to exclude from content extraction"""
 
@@ -272,7 +272,7 @@ class OptimizedConfig:
 
     # Language filtering
     allowed_locales: list[str] = field(
-        default_factory=lambda: DEFAULT_ALLOWED_LOCALES.copy()
+        default_factory=lambda: list(DEFAULT_ALLOWED_LOCALES)
     )
     """Restrict crawling to these locale prefixes (e.g., ['en']). Empty = no filter.
 
@@ -334,7 +334,7 @@ class OptimizedConfig:
     """Enable JavaScript execution (disable for text-only crawling)"""
 
     browser_extra_args: list[str] = field(
-        default_factory=lambda: DEFAULT_BROWSER_ARGS.copy()
+        default_factory=lambda: list(DEFAULT_BROWSER_ARGS)
     )
     """Extra browser arguments for performance optimization (defaults to DEFAULT_BROWSER_ARGS)"""
 
@@ -352,7 +352,7 @@ class OptimizedConfig:
     """Extract text-only content for maximum speed"""
 
     excluded_selectors: list[str] = field(
-        default_factory=lambda: DEFAULT_EXCLUDED_SELECTORS.copy()
+        default_factory=lambda: list(DEFAULT_EXCLUDED_SELECTORS)
     )
     """CSS selectors for elements to exclude (ads, tracking, etc.)"""
 
@@ -392,7 +392,7 @@ class OptimizedConfig:
     """Enable URL pattern-based configuration optimization"""
 
     documentation_patterns: list[str] = field(
-        default_factory=lambda: DEFAULT_DOCUMENTATION_PATTERNS.copy()
+        default_factory=lambda: list(DEFAULT_DOCUMENTATION_PATTERNS)
     )
     """URL patterns that indicate documentation content"""
 

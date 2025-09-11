@@ -12,15 +12,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from crawler_mcp.optimized_config import OptimizedConfig
-
 
 class OutputManager:
     """Manages all output files with automatic rotation and cleanup."""
 
-    def __init__(
-        self, base_dir: str = "./.crawl4ai", config: OptimizedConfig | None = None
-    ):
+    def __init__(self, base_dir: str = "./.crawl4ai", config: object | None = None):
         """Initialize with base directory and configuration.
 
         Args:
@@ -28,7 +24,8 @@ class OutputManager:
             config: Crawler configuration for limits and settings
         """
         self.base_dir = Path(base_dir)
-        self.config = config or OptimizedConfig()
+        # Avoid importing heavy config; only use attributes via getattr with defaults
+        self.config = config
 
         # Core directories
         self.crawls_dir = self.base_dir / "crawls"

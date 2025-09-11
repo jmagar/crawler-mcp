@@ -28,8 +28,6 @@ from .constants import (
     # Server & Network constants
     DEFAULT_HOST,
     DEFAULT_MAX_CONCURRENT_CRAWLS,
-    DEFAULT_MAX_CRAWL_PAGES,
-    # File constants
     DEFAULT_MAX_FILE_SIZE_MB,
     DEFAULT_PORT,
     DEFAULT_PREFETCH_SIZE,
@@ -335,11 +333,7 @@ class CrawlerMCPSettings(BaseSettings):
     max_concurrent_crawls: int = Field(
         default=DEFAULT_MAX_CONCURRENT_CRAWLS, alias="MAX_CONCURRENT_CRAWLS"
     )
-    max_crawl_pages: int = Field(
-        default=DEFAULT_MAX_CRAWL_PAGES,
-        alias="MAX_CRAWL_PAGES",
-        description="Maximum number of pages to crawl in a single crawl operation",
-    )
+    # Deprecated: max_crawl_pages removed; use MAX_PAGES via CrawlerSettings
 
     # Streaming Configuration - Single source of truth
     enable_streaming: bool = Field(
@@ -350,7 +344,7 @@ class CrawlerMCPSettings(BaseSettings):
 
     # URL Pattern Exclusions - Conservative defaults to avoid admin/auth areas and binary files
     crawl_exclude_url_patterns: list[str] = Field(
-        default_factory=lambda: DEFAULT_EXCLUDED_URL_PATTERNS.copy(),
+        default_factory=lambda: list(DEFAULT_EXCLUDED_URL_PATTERNS),
         alias="CRAWL_EXCLUDE_URL_PATTERNS",
         description="URL patterns to exclude during crawling - includes admin/auth paths and binary files (override via env var for broader crawling)",
     )
