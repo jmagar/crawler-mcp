@@ -149,7 +149,7 @@ class EmbeddingWorker:
                 else:
                     text_str = str(text)
                 normalized_text = text_str.strip().lower()
-                text_hash = hashlib.sha256(normalized_text.encode("utf-8")).hexdigest()
+                text_hash = hashlib.md5(normalized_text.encode("utf-8")).hexdigest()
                 text_hashes.append(text_hash)
 
                 cached_embedding = None

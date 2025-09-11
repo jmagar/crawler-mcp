@@ -94,6 +94,9 @@ report.json
 # Structured output directory
 .crawl4ai/
 
+# CLI output directory (should use .crawl4ai instead)
+crawler_mcp/cli/output/
+
 # Data directory contents (but keep structure)
 data/logs/
 data/data/

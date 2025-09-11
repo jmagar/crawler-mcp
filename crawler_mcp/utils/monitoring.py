@@ -385,7 +385,7 @@ class PerformanceMonitor:
             text = (content or "").strip()
             if not text:
                 return False
-            h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            h = hashlib.md5(text.encode("utf-8")).hexdigest()
             info = self._content_hashes.get(h)
             if info is None:
                 self._content_hashes[h] = {

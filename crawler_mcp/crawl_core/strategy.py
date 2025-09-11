@@ -24,6 +24,7 @@ from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 from crawler_mcp.clients.qdrant_http_client import QdrantClient
 from crawler_mcp.clients.tei_client import TEIEmbeddingsClient
 from crawler_mcp.config import get_settings
+from crawler_mcp.core.vectors.collections import CollectionManager
 from crawler_mcp.crawl_core.batch_utils import pack_texts_into_batches
 from crawler_mcp.factories.browser_factory import BrowserFactory
 from crawler_mcp.factories.content_extractor import ContentExtractorFactory
@@ -32,6 +33,36 @@ from crawler_mcp.models.responses import OptimizedCrawlResponse
 from crawler_mcp.optimized_config import OptimizedConfig
 from crawler_mcp.processing.result_converter import ResultConverter
 from crawler_mcp.utils.monitoring import PerformanceMonitor
+
+
+class ExclusionFilter:
+    """Filter to exclude URLs matching specific patterns."""
+
+    def __init__(self, patterns: list[str]):
+        """
+        Initialize exclusion filter with regex patterns.
+
+        Args:
+            patterns: List of regex patterns to exclude
+        """
+        import re
+
+        self.patterns = [re.compile(p) for p in patterns if p]
+
+    def apply(self, url: str) -> bool:
+        """
+        Return False to exclude URL, True to include.
+
+        Args:
+            url: URL to check against exclusion patterns
+
+        Returns:
+            False if URL should be excluded, True if it should be included
+        """
+        for pattern in self.patterns:
+            if pattern.search(url):
+                return False  # Exclude this URL
+        return True  # Include if no exclusion pattern matches
 
 
 class CrawlOrchestrator:
@@ -61,6 +92,11 @@ class CrawlOrchestrator:
         """
         self.config = config or OptimizedConfig()
         self.logger = logging.getLogger(__name__)
+
+        # Ensure exclusion patterns are available from settings
+        if not hasattr(self.config, "crawl_exclude_url_patterns"):
+            settings = get_settings()
+            self.config.crawl_exclude_url_patterns = settings.crawl_exclude_url_patterns
 
         # Initialize components
         self.browser_factory = BrowserFactory(self.config)
@@ -133,6 +169,13 @@ class CrawlOrchestrator:
             patterns=[f"https://{domain}/*", f"http://{domain}/*"]
         )
 
+        # Create exclusion filter using config patterns
+        exclusion_patterns = getattr(self.config, "crawl_exclude_url_patterns", [])
+        exclusion_filter = ExclusionFilter(exclusion_patterns)
+        self.logger.info(
+            f"Created exclusion filter with {len(exclusion_patterns)} patterns"
+        )
+
         # Create relevance scorer with documentation keywords
         scorer = KeywordRelevanceScorer(
             keywords=[
@@ -149,7 +192,7 @@ class CrawlOrchestrator:
             weight=0.7,
         )
 
-        # Create deep crawl strategy
+        # Create deep crawl strategy with both inclusion and exclusion filters
         self.logger.info(
             f"Creating BFS strategy: max_depth=3, max_pages={max_urls}, threshold={self.config.url_score_threshold}"
         )
@@ -157,7 +200,7 @@ class CrawlOrchestrator:
             max_depth=3,
             include_external=False,
             max_pages=max_urls,
-            filter_chain=FilterChain([url_filter]),
+            filter_chain=FilterChain([url_filter, exclusion_filter]),
             url_scorer=scorer,
             score_threshold=0.0,  # Lower threshold to allow more pages
         )
@@ -275,9 +318,11 @@ class CrawlOrchestrator:
                         [r for r in crawl_results if not r.success]
                     )
 
-                    # Log results summary
+                    # Log results summary with timing
+                    current_duration = time.time() - self.stats["start_time"]
                     self.logger.info(
-                        f"Crawl completed: {self.stats['pages_crawled']} successful, {self.stats['pages_failed']} failed"
+                        f"Crawl completed: {self.stats['pages_crawled']} successful, "
+                        f"{self.stats['pages_failed']} failed in {current_duration:.2f}s"
                     )
 
             self.logger.info(f"Deep crawl completed: {len(crawl_results)} pages")
@@ -308,6 +353,21 @@ class CrawlOrchestrator:
 
             self.stats["end_time"] = time.time()
 
+            # Calculate crawl duration and log final timing
+            duration = self.stats["end_time"] - self.stats["start_time"]
+            self.logger.info(
+                f"Crawl completed in {duration:.2f} seconds - "
+                f"{len(pages)} pages processed at {len(pages) / duration:.1f} pages/sec"
+            )
+
+            # Create metadata with timing info
+            metadata = {
+                "duration_seconds": duration,
+                "pages_per_second": len(pages) / duration if duration > 0 else 0,
+                "start_time": self.stats["start_time"],
+                "end_time": self.stats["end_time"],
+            }
+
             # Create response
             html_content = "\n\n".join(
                 [f"<!-- PAGE: {page.url} -->\n{page.content}" for page in pages]
@@ -330,11 +390,17 @@ class CrawlOrchestrator:
                 pages_crawled=len(pages),
                 total_pages=len(crawl_results),
                 success=len(pages) > 0,
+                metadata=metadata,
             )
 
         except Exception as e:
-            self.logger.error(f"Deep crawl failed: {e}", exc_info=True)
             self.stats["end_time"] = time.time()
+            duration = self.stats["end_time"] - self.stats.get(
+                "start_time", self.stats["end_time"]
+            )
+            self.logger.error(
+                f"Deep crawl failed after {duration:.2f}s: {e}", exc_info=True
+            )
 
             return OptimizedCrawlResponse(
                 html="",
@@ -354,6 +420,7 @@ class CrawlOrchestrator:
                 total_pages=0,
                 success=False,
                 error_message=str(e),
+                metadata={"duration_seconds": duration, "error": str(e)},
             )
 
     async def _process_embeddings(self, pages: list[PageContent]) -> None:
@@ -400,6 +467,10 @@ class CrawlOrchestrator:
         self.logger.info(f"Upserting {len(pages)} pages to Qdrant")
 
         try:
+            # Ensure collection exists before attempting upsert
+            collection_manager = CollectionManager()
+            await collection_manager.ensure_collection_exists()
+
             async with QdrantClient(
                 base_url=self.config.qdrant_url,
                 api_key=self.config.qdrant_api_key,
@@ -409,10 +480,10 @@ class CrawlOrchestrator:
                 points = []
                 for page in pages:
                     if page.embedding:
-                        # Use full SHA-256 hash converted to UUID for maximum collision resistance
-                        sha256_hash = hashlib.sha256(page.url.encode("utf-8")).digest()
-                        # Convert first 16 bytes of SHA-256 to UUID (UUID uses 128 bits = 16 bytes)
-                        url_uuid = str(uuid.UUID(bytes=sha256_hash[:16]))
+                        # Use MD5 hash converted to UUID for deterministic IDs (MD5 is 16 bytes, perfect for UUID)
+                        md5_hash = hashlib.md5(page.url.encode("utf-8")).digest()
+                        # Convert MD5 bytes directly to UUID (MD5 produces exactly 16 bytes)
+                        url_uuid = str(uuid.UUID(bytes=md5_hash))
                         point = {
                             "id": url_uuid,
                             "vector": page.embedding,

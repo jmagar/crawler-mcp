@@ -340,6 +340,8 @@ BINARY_EXTENSIONS: Final[set[str]] = {
 
 # Default URL patterns to exclude during crawling
 DEFAULT_EXCLUDED_URL_PATTERNS: Final[list[str]] = [
+    # Internal CDN/routing paths
+    r".*/_sites/.*",
     # Admin and authentication endpoints
     r".*/admin.*",
     r".*/login.*",

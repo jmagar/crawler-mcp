@@ -175,6 +175,14 @@ def _detect_target(
         return "directory"
     if target.endswith(".git") or target.startswith("git@") or "github.com" in target:
         return "repository"
+
+    # Check if target looks like a domain/URL without protocol
+    if re.match(
+        r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*(/.*)?$",
+        target,
+    ):
+        return "website"
+
     raise ToolError(f"Unsupported or undetected target type: {target}")
 
 
@@ -424,6 +432,12 @@ def register_crawling_tools(mcp: FastMCP) -> None:
     ) -> dict[str, Any]:
         """Unified Smart Crawling: website, directory, repository, or GitHub PR."""
         kind = _detect_target(target)
+
+        # Auto-add https:// protocol for website targets without protocol
+        if kind == "website" and not re.match(r"^https?://", target, re.IGNORECASE):
+            target = f"https://{target}"
+            await ctx.info(f"Auto-detected website, using: {target}")
+
         tracker = progress_middleware.create_tracker(f"crawl_{hash(target)}")
         try:
             await ctx.report_progress(progress=5, total=100)

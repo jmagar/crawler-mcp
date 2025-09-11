@@ -504,6 +504,12 @@ class OptimizedConfig:
             env_var = f"{prefix}{env_suffix}"
             env_value = os.getenv(env_var)
 
+            # Special handling for standard env vars - check without prefix too
+            if env_value is None and attr_name == "max_crawl_pages":
+                env_value = os.getenv("MAX_CRAWL_PAGES")
+            elif env_value is None and attr_name == "max_concurrent_crawls":
+                env_value = os.getenv("MAX_CONCURRENT_CRAWLS")
+
             if env_value is not None:
                 # Get the current attribute value to determine type
                 current_value = getattr(config, attr_name)
@@ -570,6 +576,10 @@ class OptimizedConfig:
                         setattr(config, attr_name, normalized_value)
                     else:
                         setattr(config, attr_name, env_value)
+
+        # Auto-adjust crawl_semaphore_count to respect max_concurrent_crawls constraint
+        if config.crawl_semaphore_count > config.max_concurrent_crawls * 2:
+            config.crawl_semaphore_count = config.max_concurrent_crawls * 2
 
         # Always ensure these values as requested
         config.check_robots_txt = False

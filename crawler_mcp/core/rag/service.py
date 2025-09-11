@@ -416,22 +416,24 @@ class RagService:
         normalized_url = normalize_url(url)
         id_string = f"{normalized_url}:{chunk_index}"
         # Generate a deterministic UUID from the hash
-        hash_bytes = hashlib.sha256(id_string.encode()).digest()[:16]
+        hash_bytes = hashlib.md5(
+            id_string.encode()
+        ).digest()  # MD5 produces exactly 16 bytes
         # Create UUID from the first 16 bytes of the hash
         deterministic_uuid = uuid.UUID(bytes=hash_bytes)
         return str(deterministic_uuid)
 
     def _calculate_content_hash(self, content: str) -> str:
         """
-        Calculate SHA256 hash of content for change detection.
+        Calculate MD5 hash of content for change detection.
 
         Args:
             content: Text content to hash
 
         Returns:
-            SHA256 hash hexdigest string
+            MD5 hash hexdigest string
         """
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+        return hashlib.md5(content.encode("utf-8")).hexdigest()
 
     # Backwards compatibility helper methods
     def _is_random_uuid(self, chunk_id: str) -> bool:

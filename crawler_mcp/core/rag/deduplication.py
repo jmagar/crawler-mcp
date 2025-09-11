@@ -24,15 +24,15 @@ class ContentHasher:
     @staticmethod
     def hash_content(content: str) -> str:
         """
-        Generate SHA256 hash of normalized content.
+        Generate MD5 hash of normalized content.
 
         Args:
             content: Text content to hash
 
         Returns:
-            SHA256 hash hexdigest string
+            MD5 hash hexdigest string
         """
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+        return hashlib.md5(content.encode("utf-8")).hexdigest()
 
     @staticmethod
     def hash_chunk_metadata(chunk: DocumentChunk) -> str:
@@ -48,7 +48,7 @@ class ContentHasher:
         # Include key metadata that affects uniqueness
         metadata_string = f"{chunk.source_url}:{chunk.source_title}:{chunk.chunk_index}"
         combined_string = f"{chunk.content}:{metadata_string}"
-        return hashlib.sha256(combined_string.encode("utf-8")).hexdigest()
+        return hashlib.md5(combined_string.encode("utf-8")).hexdigest()
 
     @staticmethod
     def normalize_whitespace(content: str) -> str:
@@ -342,7 +342,9 @@ class DeduplicationManager(ABC):
         normalized_url = normalize_url(url)
         id_string = f"{normalized_url}:{chunk_index}"
         # Generate a deterministic UUID from the hash
-        hash_bytes = hashlib.sha256(id_string.encode()).digest()[:16]
+        hash_bytes = hashlib.md5(
+            id_string.encode()
+        ).digest()  # MD5 produces exactly 16 bytes
         # Create UUID from the first 16 bytes of the hash
         deterministic_uuid = uuid.UUID(bytes=hash_bytes)
         return str(deterministic_uuid)
