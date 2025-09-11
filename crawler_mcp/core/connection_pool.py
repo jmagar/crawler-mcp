@@ -13,7 +13,7 @@ from typing import Any
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http.exceptions import UnexpectedResponse
 
-from ..config import settings
+from ..settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +42,7 @@ class QdrantConnectionPool:
             timeout: Request timeout in seconds
             health_check_interval: Seconds between health checks
         """
+        settings = get_settings()
         self.url = url or settings.qdrant_url
         self.api_key = api_key or settings.qdrant_api_key
         self.size = size or settings.qdrant_connection_pool_size

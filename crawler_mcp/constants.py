@@ -261,16 +261,16 @@ class EmbeddingProjection(str, Enum):
 # =============================================================================
 
 # Default browser arguments for optimal performance
-DEFAULT_BROWSER_ARGS: Final[list[str]] = [
+DEFAULT_BROWSER_ARGS: Final[tuple[str, ...]] = (
     "--disable-dev-shm-usage",
     "--disable-background-timer-throttling",
     "--disable-backgrounding-occluded-windows",
     "--disable-renderer-backgrounding",
     "--disable-features=TranslateUI",
-]
+)
 
 # Default excluded HTML tags for content extraction
-DEFAULT_EXCLUDED_TAGS: Final[list[str]] = [
+DEFAULT_EXCLUDED_TAGS: Final[tuple[str, ...]] = (
     "script",
     "style",
     "noscript",
@@ -279,7 +279,7 @@ DEFAULT_EXCLUDED_TAGS: Final[list[str]] = [
     "header",
     "footer",
     "aside",
-]
+)
 
 # Image file extensions for validation
 IMAGE_EXTENSIONS: Final[set[str]] = {
@@ -339,7 +339,7 @@ BINARY_EXTENSIONS: Final[set[str]] = {
 }
 
 # Default URL patterns to exclude during crawling
-DEFAULT_EXCLUDED_URL_PATTERNS: Final[list[str]] = [
+DEFAULT_EXCLUDED_URL_PATTERNS: Final[tuple[str, ...]] = (
     # Internal CDN/routing paths
     r".*/_sites/.*",
     # Admin and authentication endpoints
@@ -367,10 +367,10 @@ DEFAULT_EXCLUDED_URL_PATTERNS: Final[list[str]] = [
     r".*\.mkv$",
     r".*\.iso$",
     r".*\.dmg$",
-]
+)
 
 # Default CSS selectors to exclude from content extraction
-DEFAULT_EXCLUDED_SELECTORS: Final[list[str]] = [
+DEFAULT_EXCLUDED_SELECTORS: Final[tuple[str, ...]] = (
     # Copy buttons
     ".copy-button",
     ".copy-code-button",
@@ -443,10 +443,10 @@ DEFAULT_EXCLUDED_SELECTORS: Final[list[str]] = [
     "[id*='ad-']",
     ".sidebar-ad",
     ".sponsored",
-]
+)
 
 # Default documentation URL patterns
-DEFAULT_DOCUMENTATION_PATTERNS: Final[list[str]] = [
+DEFAULT_DOCUMENTATION_PATTERNS: Final[tuple[str, ...]] = (
     "*/docs/*",
     "*/documentation/*",
     "*/api/*",
@@ -454,10 +454,10 @@ DEFAULT_DOCUMENTATION_PATTERNS: Final[list[str]] = [
     "*/tutorial/*",
     "*/reference/*",
     "*/manual/*",
-]
+)
 
 # Default allowed locales for content filtering
-DEFAULT_ALLOWED_LOCALES: Final[list[str]] = ["en"]
+DEFAULT_ALLOWED_LOCALES: Final[tuple[str, ...]] = ("en",)
 
 # =============================================================================
 # ERROR MESSAGES

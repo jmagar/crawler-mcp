@@ -22,8 +22,8 @@ __author__ = "Crawler-MCP Team"
 __description__ = "RAG-enabled web crawling MCP server"
 
 # Main exports - use lazy imports to avoid module conflicts
-from .config import settings
-from .crawl_core.strategy import CrawlOrchestrator
+from .core.strategy import CrawlOrchestrator
+from .settings import settings
 
 __all__ = ["CrawlOrchestrator", "get_main", "get_mcp", "settings"]
 

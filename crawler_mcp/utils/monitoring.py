@@ -356,13 +356,16 @@ class PerformanceMonitor:
             is_duplicate: Whether content was detected as duplicate
         """
         # Update quality metrics
-        total_validated = self.metrics.pages_crawled
+        total_validated = self.metrics.content_validations_recorded
         if total_validated > 0:
             # Running average of quality scores
             current_avg = self.metrics.content_quality_score
             self.metrics.content_quality_score = (
-                current_avg * (total_validated - 1) + quality_score
-            ) / total_validated
+                current_avg * total_validated + quality_score
+            ) / (total_validated + 1)
+        else:
+            # First validation
+            self.metrics.content_quality_score = quality_score
         # Track validations recorded
         self.metrics.content_validations_recorded += 1
 
@@ -385,7 +388,7 @@ class PerformanceMonitor:
             text = (content or "").strip()
             if not text:
                 return False
-            h = hashlib.md5(text.encode("utf-8")).hexdigest()
+            h = hashlib.blake2b(text.encode("utf-8"), digest_size=32).hexdigest()
             info = self._content_hashes.get(h)
             if info is None:
                 self._content_hashes[h] = {
@@ -737,10 +740,15 @@ class PerformanceMonitor:
 
     # Internal: hook worker
     def _start_hook_worker(self) -> None:
-        if self._hook_queue is None:
-            self._hook_queue = asyncio.Queue()
-        if self._hook_worker_task is None or self._hook_worker_task.done():
-            self._hook_worker_task = asyncio.create_task(self._hook_worker())
+        try:
+            loop = asyncio.get_running_loop()
+            if self._hook_queue is None:
+                self._hook_queue = asyncio.Queue()
+            if self._hook_worker_task is None or self._hook_worker_task.done():
+                self._hook_worker_task = loop.create_task(self._hook_worker())
+        except RuntimeError:
+            # No event loop running, cannot start worker
+            pass
 
     def _stop_hook_worker(self) -> None:
         # Signal termination and cancel worker
@@ -758,13 +766,23 @@ class PerformanceMonitor:
             return
         if self._hook_queue is None:
             # Fallback to direct call if queue not started
-            asyncio.create_task(self.trigger_hook(hook_type, **kwargs))  # noqa: RUF006
+            try:
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(self.trigger_hook(hook_type, **kwargs))  # noqa: RUF006
+            except RuntimeError:
+                # No event loop running, schedule for later
+                pass
             return
         try:
             self._hook_queue.put_nowait((hook_type, kwargs))
         except Exception:
             # In case of full queue or other errors, fallback to direct execution
-            asyncio.create_task(self.trigger_hook(hook_type, **kwargs))  # noqa: RUF006
+            try:
+                loop = asyncio.get_running_loop()
+                task = loop.create_task(self.trigger_hook(hook_type, **kwargs))  # noqa: RUF006, F841  # noqa: F841
+            except RuntimeError:
+                # No event loop running, skip hook execution
+                pass
 
     async def _hook_worker(self) -> None:
         try:

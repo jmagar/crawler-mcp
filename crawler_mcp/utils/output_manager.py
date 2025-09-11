@@ -153,13 +153,22 @@ class OutputManager:
         """Save all crawl outputs with automatic rotation.
 
         Args:
-            domain: Sanitized domain name
+            domain: Sanitized domain name (already processed)
             html: Combined HTML content
             pages: List of page objects
             report: Performance report data
             session_id: Unique session identifier. If None, uses "latest" for backward compatibility.
         """
-        paths = self.get_crawl_output_paths(f"https://{domain}", session_id)
+        # Use session_id if provided, otherwise fall back to "latest" for backward compatibility
+        dir_name = session_id if session_id else "latest"
+        session_dir = self.crawls_dir / domain / dir_name
+        session_dir.mkdir(parents=True, exist_ok=True)
+
+        paths = {
+            "html": session_dir / "combined.html",
+            "ndjson": session_dir / "pages.ndjson",
+            "report": session_dir / "report.json",
+        }
 
         try:
             # Write HTML output
@@ -251,7 +260,7 @@ class OutputManager:
                     **metadata,
                     "session_id": session_id,
                     "timestamp": time.time(),
-                    "size_bytes": self._get_domain_size(domain),
+                    "size_bytes": self._get_session_size(domain, session_id),
                 }
 
                 # Update latest pointer to most recent session
@@ -283,6 +292,21 @@ class OutputManager:
 
         total_size = 0
         for file_path in domain_dir.rglob("*"):
+            if file_path.is_file():
+                try:
+                    total_size += file_path.stat().st_size
+                except OSError:
+                    continue
+        return total_size
+
+    def _get_session_size(self, domain: str, session_id: str) -> int:
+        """Get total size of a specific session directory in bytes."""
+        session_dir = self.crawls_dir / domain / session_id
+        if not session_dir.exists():
+            return 0
+
+        total_size = 0
+        for file_path in session_dir.rglob("*"):
             if file_path.is_file():
                 try:
                     total_size += file_path.stat().st_size
@@ -324,21 +348,30 @@ class OutputManager:
             with open(self.crawls_index, encoding="utf-8") as f:
                 index = json.load(f)
 
-            # Remove backup directories first (oldest first)
-            domains_by_backup_age = []
+            # Remove oldest sessions first (keep latest_session for each domain)
+            sessions_by_age = []
             for domain, data in index.get("domains", {}).items():
-                if "backup" in data:
-                    backup_time = data["backup"].get("timestamp", 0)
-                    domains_by_backup_age.append((backup_time, domain))
+                latest_session_id = data.get("latest_session")
+                sessions = data.get("sessions", {})
 
-            domains_by_backup_age.sort()  # Oldest first
+                for session_id, session_data in sessions.items():
+                    # Don't remove the latest session for each domain
+                    if session_id != latest_session_id:
+                        session_time = session_data.get("timestamp", 0)
+                        sessions_by_age.append((session_time, domain, session_id))
 
-            for _, domain in domains_by_backup_age:
-                backup_dir = self.crawls_dir / domain / "backup"
-                if backup_dir.exists():
-                    shutil.rmtree(backup_dir)
-                    if domain in index["domains"]:
-                        index["domains"][domain].pop("backup", None)
+            sessions_by_age.sort()  # Oldest first
+
+            for _, domain, session_id in sessions_by_age:
+                session_dir = self.crawls_dir / domain / session_id
+                if session_dir.exists():
+                    shutil.rmtree(session_dir)
+                    # Remove from index
+                    if (
+                        domain in index["domains"]
+                        and "sessions" in index["domains"][domain]
+                    ):
+                        index["domains"][domain]["sessions"].pop(session_id, None)
 
                     # Check if we're under the limit now
                     if self.get_total_size() <= max_size:

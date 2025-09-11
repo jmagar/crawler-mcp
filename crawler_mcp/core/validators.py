@@ -5,6 +5,7 @@ This module provides standardized validators to replace the 37+ validation funct
 with similar patterns found throughout the codebase.
 """
 
+import os
 import re
 import urllib.parse
 from collections.abc import Collection
@@ -246,10 +247,8 @@ class PathValidator(BaseValidator):
                     f"{field_name} must be a directory: {path}"
                 )
 
-            # Permission checks
-            if (
-                self.must_be_readable and not path.exists()
-            ):  # Can't check if doesn't exist
+            # Permission checks using os.access() for accurate permission testing
+            if self.must_be_readable and not os.access(path, os.R_OK):
                 return ValidationResult.failure(
                     f"{field_name} must be readable: {path}"
                 )
@@ -260,6 +259,10 @@ class PathValidator(BaseValidator):
                 if not check_path.exists():
                     return ValidationResult.failure(
                         f"{field_name} parent directory does not exist: {path}"
+                    )
+                if not os.access(check_path, os.W_OK):
+                    return ValidationResult.failure(
+                        f"{field_name} must be writable: {check_path}"
                     )
 
         # Extension check

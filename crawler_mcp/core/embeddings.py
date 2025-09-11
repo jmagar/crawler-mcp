@@ -10,8 +10,8 @@ from typing import Any, TypeVar
 import httpx
 from fastmcp.exceptions import ToolError
 
-from ..config import settings
 from ..models.rag import EmbeddingResult
+from ..settings import get_settings
 from .mixins import AsyncServiceBase
 from .resilience import exponential_backoff
 
@@ -27,6 +27,7 @@ class EmbeddingService(AsyncServiceBase):
 
     def __init__(self) -> None:
         super().__init__()
+        settings = get_settings()
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(settings.tei_timeout),
             limits=httpx.Limits(
@@ -78,6 +79,7 @@ class EmbeddingService(AsyncServiceBase):
                 await self.client.aclose()
 
             # Create a new client
+            settings = get_settings()
             self.client = httpx.AsyncClient(
                 timeout=httpx.Timeout(settings.tei_timeout),
                 limits=httpx.Limits(
@@ -158,6 +160,8 @@ class EmbeddingService(AsyncServiceBase):
         if not text.strip():
             raise ToolError("Cannot generate embedding for empty text")
 
+        settings = get_settings()
+
         # Truncate text if necessary
         if truncate and len(text) > settings.embedding_max_length:
             text = text[: settings.embedding_max_length]
@@ -207,6 +211,7 @@ class EmbeddingService(AsyncServiceBase):
             )
 
         except httpx.TimeoutException as e:
+            settings = get_settings()
             raise ToolError(
                 f"Embedding request timed out after {settings.tei_timeout}s"
             ) from e
@@ -229,6 +234,8 @@ class EmbeddingService(AsyncServiceBase):
         """
         if not texts:
             return []
+
+        settings = get_settings()
 
         # Filter and truncate texts
         valid_texts = []
@@ -300,6 +307,7 @@ class EmbeddingService(AsyncServiceBase):
             return results
 
         except httpx.TimeoutException as e:
+            settings = get_settings()
             raise ToolError(
                 f"Batch embedding request timed out after {settings.tei_timeout}s"
             ) from e
@@ -333,6 +341,7 @@ class EmbeddingService(AsyncServiceBase):
             return []
 
         if batch_size is None:
+            settings = get_settings()
             batch_size = settings.tei_batch_size
 
         # For optimal performance, use true batch API

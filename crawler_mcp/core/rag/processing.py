@@ -343,7 +343,7 @@ class ProcessingPipeline:
         crawl_result: CrawlResult,
         deduplication: bool | None = None,
         force_update: bool = False,
-        progress_callback: Callable[..., None] | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
         seed_url: str | None = None,
         crawl_session_id: str | None = None,
     ) -> dict[str, int]:

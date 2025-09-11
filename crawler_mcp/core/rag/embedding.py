@@ -215,7 +215,7 @@ class EmbeddingWorker:
                     final_embeddings.append(emb)
                 else:
                     # This shouldn't happen if logic is correct, but provide fallback
-                    final_embeddings.append([0.0] * 384)  # Common embedding dimension
+                    final_embeddings.append([0.0] * settings.embedding_dimension)
             return final_embeddings
 
         except Exception as e:
@@ -370,14 +370,16 @@ class EmbeddingPipeline:
                     return [result.embedding for result in embedding_results]
                 else:
                     # Return empty embeddings if service unavailable
-                    return [[0.0] * 768] * len(texts)
+                    return [[0.0] * settings.embedding_dimension] * len(texts)
 
         # Use parallel batch processing for larger sets
         process_results: list[
             EmbeddingProcessResult
         ] = await self._process_batches_parallel(texts, effective_batch_size)
         return [
-            result.embedding if result.success and result.embedding else [0.0] * 768
+            result.embedding
+            if result.success and result.embedding
+            else [0.0] * settings.embedding_dimension
             for result in process_results
         ]
 

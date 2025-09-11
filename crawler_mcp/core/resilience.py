@@ -12,7 +12,7 @@ from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, TypeVar, cast
 
-from ..config import settings
+from ..settings import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +188,7 @@ def exponential_backoff(
         exceptions: Tuple of exceptions to catch (None = all)
     """
     # Use settings or defaults
+    settings = get_settings()
     max_retries = max_retries or settings.embedding_max_retries
     initial_delay = initial_delay or settings.retry_initial_delay
     max_delay = max_delay or settings.retry_max_delay

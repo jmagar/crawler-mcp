@@ -19,10 +19,10 @@ from typing import Any, Literal
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
 
-from crawler_mcp.crawl_core.strategy import CrawlOrchestrator
+from crawler_mcp.core.strategy import CrawlOrchestrator
 from crawler_mcp.middleware.progress import progress_middleware
 from crawler_mcp.models.crawl import PageContent
-from crawler_mcp.optimized_config import OptimizedConfig
+from crawler_mcp.settings import get_settings
 from crawler_mcp.utils.output_manager import OutputManager
 
 _HASH32_40_64_RE = re.compile(
@@ -139,26 +139,14 @@ def _should_ingest_rag(rag_ingest: bool | None) -> bool:
     return bool(tei and qdrant)
 
 
-def _apply_rag_to_config(cfg: OptimizedConfig, enable: bool) -> None:
-    """Apply RAG auto/override to OptimizedConfig (embeddings + qdrant)."""
+def _validate_rag_requirements(enable: bool) -> None:
+    """Validate that RAG services are available when RAG ingestion is requested."""
     if enable:
-        # Prefer optimized-prefixed envs; fall back to standard ones
-        tei = _env("OPTIMIZED_CRAWLER_TEI_ENDPOINT") or _env("TEI_URL")
-        qurl = _env("OPTIMIZED_CRAWLER_QDRANT_URL") or _env("QDRANT_URL")
-        qcol = _env("OPTIMIZED_CRAWLER_QDRANT_COLLECTION") or _env("QDRANT_COLLECTION")
-        if not (tei and qurl):
+        settings = get_settings()
+        if not (settings.tei_url and settings.qdrant_url):
             raise ToolError(
                 "RAG ingestion requested but TEI and/or Qdrant endpoints are missing"
             )
-        cfg.enable_embeddings = True
-        cfg.enable_qdrant = True
-        cfg.tei_endpoint = tei
-        cfg.qdrant_url = qurl
-        if qcol:
-            cfg.qdrant_collection = qcol
-    else:
-        cfg.enable_embeddings = False
-        cfg.enable_qdrant = False
 
 
 def _detect_target(
@@ -175,6 +163,18 @@ def _detect_target(
         return "directory"
     if target.endswith(".git") or target.startswith("git@") or "github.com" in target:
         return "repository"
+
+    # Check for localhost
+    if target == "localhost" or target.startswith("localhost:"):
+        return "website"
+
+    # Check for IPv4 address (with optional port)
+    if re.match(
+        r"^((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}"
+        r"(25[0-5]|2[0-4]\d|1?\d?\d)(:\d+)?(/.*)?$",
+        target,
+    ):
+        return "website"
 
     # Check if target looks like a domain/URL without protocol
     if re.match(
@@ -298,15 +298,25 @@ def register_crawling_tools(mcp: FastMCP) -> None:
             await ctx.info(f"Starting scrape of: {url}")
             await ctx.report_progress(progress=5, total=100)
 
-            cfg = OptimizedConfig.from_env()
-            if javascript is not None:
-                cfg.browser_mode = "full" if bool(javascript) else "text"
-            cfg.page_timeout = max(1000, int(timeout_ms))
-
             rag_enabled = _should_ingest_rag(rag_ingest)
-            _apply_rag_to_config(cfg, rag_enabled)
+            _validate_rag_requirements(rag_enabled)
 
-            output = OutputManager(config=cfg)
+            # Create overrides dict for runtime configuration
+            overrides = {}
+
+            # Wire tool parameters to overrides
+            if css_selector is not None:
+                overrides["css_selector"] = css_selector
+            if javascript is not None:
+                overrides["javascript_enabled"] = javascript
+            if timeout_ms != 30000:  # Only override if different from default
+                overrides["page_timeout"] = max(
+                    1, int(timeout_ms / 1000)
+                )  # Convert ms to seconds
+            if wait_for is not None:
+                overrides["wait_for"] = wait_for
+
+            output = OutputManager()
             domain = output.sanitize_domain(url)
             output.rotate_crawl_backup(domain)
 
@@ -316,13 +326,14 @@ def register_crawling_tools(mcp: FastMCP) -> None:
             session_id = str(uuid.uuid4())
             await ctx.info(f"Crawl session ID: {session_id}")
 
-            strategy = CrawlOrchestrator(cfg)
+            s = get_settings()
+            strategy = CrawlOrchestrator(s, overrides)
             await ctx.info("Calling strategy.crawl with max_urls=1")
             try:
                 resp = await strategy.crawl(
                     url,
                     max_urls=1,
-                    max_concurrent=max(1, cfg.max_concurrent_crawls),
+                    max_concurrent=max(1, s.max_concurrent_crawls),
                 )
                 await ctx.info(
                     f"Strategy returned success: {getattr(resp, 'success', 'unknown')}"
@@ -442,19 +453,22 @@ def register_crawling_tools(mcp: FastMCP) -> None:
         try:
             await ctx.report_progress(progress=5, total=100)
 
-            cfg = OptimizedConfig.from_env()
-            cfg.page_timeout = max(1000, int(timeout_ms))
-            if max_concurrent is not None:
-                cfg.max_concurrent_crawls = max(1, int(max_concurrent))
-            if javascript is not None:
-                cfg.browser_mode = "full" if bool(javascript) else "text"
-            if limit is None:
-                limit = cfg.max_crawl_pages
-
             rag_enabled = _should_ingest_rag(rag_ingest)
-            _apply_rag_to_config(cfg, rag_enabled)
+            _validate_rag_requirements(rag_enabled)
 
-            output = OutputManager(config=cfg)
+            # Create overrides dict for runtime configuration
+            overrides = {}
+            if limit is not None:
+                overrides["max_pages"] = limit
+
+            if limit is None:
+                limit = get_settings().max_pages
+            try:
+                limit_int = max(1, int(limit))
+            except Exception as e:
+                raise ToolError(f"Invalid limit: {limit!r}") from e
+
+            output = OutputManager()
 
             await ctx.info("Preparing crawl...")
             await ctx.report_progress(progress=15, total=100)
@@ -476,11 +490,12 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 domain_for_index = output.sanitize_domain(url)
                 output.rotate_crawl_backup(domain_for_index)
 
-                strategy = CrawlOrchestrator(cfg)
+                s = get_settings()
+                strategy = CrawlOrchestrator(s, overrides)
                 resp = await strategy.crawl(
                     url,
-                    max_urls=max(1, int(limit)),
-                    max_concurrent=max(1, cfg.max_concurrent_crawls),
+                    max_urls=limit_int,
+                    max_concurrent=max(1, s.max_concurrent_crawls),
                 )
                 pages = getattr(strategy, "get_last_pages", lambda: [])()
                 pages_total = len(pages)
@@ -492,14 +507,8 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 except Exception:
                     failed_ct = 0
                 pages_failed = failed_ct
-                duration_s = (
-                    float(
-                        getattr(getattr(resp, "metadata", {}), "get", lambda *_: 0)(
-                            "duration_seconds", 0
-                        )
-                    )
-                    or 0.0
-                )
+                md = getattr(resp, "metadata", {}) or {}
+                duration_s = float(md.get("duration_seconds", 0) or 0.0)
 
                 paths = output.get_crawl_output_paths(url, session_id)
                 output.save_crawl_outputs(
@@ -528,7 +537,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                     root=root,
                     include=include_patterns,
                     exclude=exclude_patterns,
-                    max_files=int(limit),
+                    max_files=limit_int,
                     file_size_limit_bytes=2_000_000,
                 )
                 pages_total = len(pages)
@@ -558,7 +567,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                     repo_url=target,
                     include=include_patterns,
                     exclude=exclude_patterns,
-                    max_files=int(limit),
+                    max_files=limit_int,
                     file_size_limit_bytes=2_000_000,
                 )
                 try:

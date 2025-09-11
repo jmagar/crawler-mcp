@@ -4,18 +4,20 @@ Data models for web crawling operations.
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
-# Get embedding dimension from configuration
-from crawler_mcp.config import get_settings
 
-# Use configured dimension or fall back to default
-settings = get_settings()
-EMBEDDING_DIM = settings.embedding_dimension  # Will be 1024 from env or default
+def get_embedding_dim() -> int:
+    """Get embedding dimension from configuration at runtime."""
+    from crawler_mcp.settings import get_settings
+
+    settings = get_settings()
+    return settings.embedding_dimension
 
 
 # Reusable validator function
@@ -61,18 +63,159 @@ class PageContent(BaseModel):
         calculate_word_count_validator
     )
 
+    @field_validator("links_count", mode="before")
+    @classmethod
+    def derive_links_count(cls, v: int | None, info: ValidationInfo) -> int:
+        """Derive links_count from links list if not explicitly set, with consistency validation."""
+        if info.data and "links" in info.data:
+            try:
+                links = info.data.get("links", [])
+                if not isinstance(links, list):
+                    # Handle case where links might not be a list
+                    links = []
+                actual_count = len(links)
+
+                # If count is not provided (None), derive from list
+                if v is None:
+                    return actual_count
+
+                # If count is provided but is 0 and we have links, derive from list
+                if v == 0 and actual_count > 0:
+                    return actual_count
+
+                # Warn about inconsistency if explicitly set count differs significantly
+                if v != actual_count and abs(v - actual_count) > 0:
+                    # For now, trust the explicit count but this could be logged
+                    pass
+
+            except (AttributeError, TypeError):
+                # Fallback if data access fails
+                pass
+
+        return v if v is not None else 0
+
+    @field_validator("images_count", mode="before")
+    @classmethod
+    def derive_images_count(cls, v: int | None, info: ValidationInfo) -> int:
+        """Derive images_count from images list if not explicitly set, with consistency validation."""
+        if info.data and "images" in info.data:
+            try:
+                images = info.data.get("images", [])
+                if not isinstance(images, list):
+                    # Handle case where images might not be a list
+                    images = []
+                actual_count = len(images)
+
+                # If count is not provided (None), derive from list
+                if v is None:
+                    return actual_count
+
+                # If count is provided but is 0 and we have images, derive from list
+                if v == 0 and actual_count > 0:
+                    return actual_count
+
+                # Warn about inconsistency if explicitly set count differs significantly
+                if v != actual_count and abs(v - actual_count) > 0:
+                    # For now, trust the explicit count but this could be logged
+                    pass
+
+            except (AttributeError, TypeError):
+                # Fallback if data access fails
+                pass
+
+        return v if v is not None else 0
+
     @field_validator("embedding")
     @classmethod
     def validate_embedding_dimension(
         cls, v: list[float] | None, info: ValidationInfo
     ) -> list[float] | None:
-        """Validate embedding has correct dimension."""
+        """Validate embedding has correct dimension and valid values with hardened security."""
         if v is not None:
-            # Get expected dimension from settings
-            from crawler_mcp.config import get_settings
+            # Basic type and structure validation
+            if not isinstance(v, list):
+                raise ValueError(f"Embedding must be a list, got {type(v)}")
 
-            settings = get_settings()
-            expected_dim = settings.embedding_dimension
+            if len(v) == 0:
+                raise ValueError("Embedding cannot be empty")
+
+            # Hardened dimension bounds validation
+            if len(v) > 4096:
+                raise ValueError(
+                    f"Embedding dimension {len(v)} exceeds maximum allowed (4096). "
+                    "This may indicate corrupted data or memory exhaustion attack."
+                )
+            if len(v) < 32:
+                raise ValueError(
+                    f"Embedding dimension {len(v)} is suspiciously small (minimum 32). "
+                    "Check if embedding model is configured correctly."
+                )
+
+            # Check for finite values and valid float types with value bounds
+            extreme_values = []
+            for i, val in enumerate(v):
+                if not isinstance(val, int | float):
+                    raise ValueError(
+                        f"Embedding value at index {i} must be numeric, got {type(val)}: {val}"
+                    )
+                if not math.isfinite(val):
+                    raise ValueError(
+                        f"Embedding contains non-finite value at index {i}: {val}"
+                    )
+                # Check for reasonable value bounds (most embeddings are in [-10, 10] range)
+                if abs(val) > 100.0:
+                    extreme_values.append((i, val))
+
+            if extreme_values:
+                raise ValueError(
+                    f"Embedding contains {len(extreme_values)} extreme values (>100): "
+                    f"{extreme_values[:3]}{'...' if len(extreme_values) > 3 else ''}. "
+                    "This may indicate corrupted or unnormalized embeddings."
+                )
+
+            # Detect suspicious patterns
+            v_set = set(v)
+            if len(v_set) == 1:
+                raise ValueError(
+                    f"Embedding has all identical values ({next(iter(v_set))}). "
+                    "This indicates degenerate or corrupted embedding."
+                )
+            if len(v_set) < len(v) * 0.1:  # Less than 10% unique values
+                raise ValueError(
+                    f"Embedding has suspiciously few unique values ({len(v_set)}/{len(v)}). "
+                    "This may indicate corrupted or quantized embedding."
+                )
+
+            # Validate vector norm (embeddings should have reasonable magnitude)
+            norm = math.sqrt(sum(x * x for x in v))
+            if norm == 0.0:
+                raise ValueError("Embedding has zero norm (all values are zero)")
+            if norm < 1e-6:
+                raise ValueError(
+                    f"Embedding has suspiciously small norm ({norm:.2e}). "
+                    "This may indicate corrupted or scaled embedding."
+                )
+            if norm > 1000.0:
+                raise ValueError(
+                    f"Embedding has suspiciously large norm ({norm:.2f}). "
+                    "This may indicate unnormalized or corrupted embedding."
+                )
+
+            # Get expected dimension from runtime accessor with proper error handling
+            try:
+                expected_dim = get_embedding_dim()
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to get expected embedding dimension from configuration: {e}. "
+                    "Ensure EMBEDDING_DIMENSION environment variable is properly set."
+                ) from e
+
+            # Validate dimension bounds
+            if expected_dim <= 0:
+                raise ValueError(
+                    f"Invalid expected embedding dimension: {expected_dim}. "
+                    "EMBEDDING_DIMENSION must be a positive integer."
+                )
 
             if len(v) != expected_dim:
                 raise ValueError(

@@ -49,7 +49,7 @@ def find_sentence_boundary(search_text: str, ideal_end: int) -> int | None:
         sentence_breaks.extend(
             [
                 i + len(pattern)
-                for i in range(len(search_text) - len(pattern))
+                for i in range(len(search_text) - len(pattern) + 1)
                 if search_text[i : i + len(pattern)] == pattern
             ]
         )

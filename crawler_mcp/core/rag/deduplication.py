@@ -30,9 +30,9 @@ class ContentHasher:
             content: Text content to hash
 
         Returns:
-            MD5 hash hexdigest string
+            BLAKE2b hash hexdigest string
         """
-        return hashlib.md5(content.encode("utf-8")).hexdigest()
+        return hashlib.blake2b(content.encode("utf-8"), digest_size=32).hexdigest()
 
     @staticmethod
     def hash_chunk_metadata(chunk: DocumentChunk) -> str:
@@ -48,7 +48,9 @@ class ContentHasher:
         # Include key metadata that affects uniqueness
         metadata_string = f"{chunk.source_url}:{chunk.source_title}:{chunk.chunk_index}"
         combined_string = f"{chunk.content}:{metadata_string}"
-        return hashlib.md5(combined_string.encode("utf-8")).hexdigest()
+        return hashlib.blake2b(
+            combined_string.encode("utf-8"), digest_size=32
+        ).hexdigest()
 
     @staticmethod
     def normalize_whitespace(content: str) -> str:

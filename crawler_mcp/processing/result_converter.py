@@ -22,21 +22,28 @@ from crawler_mcp.models.crawl import (
     CrawlStatus,
     PageContent,
 )
-from crawler_mcp.optimized_config import OptimizedConfig
+from crawler_mcp.settings import CrawlerSettings
 
 
 class ResultConverter:
     """Converts between Crawl4AI models and our MCP models"""
 
-    def __init__(self, config: OptimizedConfig | None = None):
-        """
-        Initialize result converter.
+    def __init__(
+        self, settings: CrawlerSettings, overrides: dict[str, Any] | None = None
+    ):
+        """Initialize result converter.
 
         Args:
-            config: Optional optimized crawler configuration
+            settings: Global settings instance
+            overrides: Optional runtime configuration overrides
         """
-        self.config = config or OptimizedConfig()
+        self.settings = settings
+        self.overrides = overrides or {}
         self.logger = logging.getLogger(__name__)
+
+    def get_config_value(self, key: str, default: Any = None) -> Any:
+        """Get configuration value from overrides or settings."""
+        return self.overrides.get(key, getattr(self.settings, key, default))
 
     def crawl4ai_to_page_content(
         self, result: Crawl4AIResult, prefer_fit_markdown: bool = True
@@ -59,10 +66,18 @@ class ResultConverter:
             title = self._extract_title(result)
 
             # Extract and process links
-            links = self._extract_links(result) if self.config.extract_links else []
+            links = (
+                self._extract_links(result)
+                if self.get_config_value("extract_links", False)
+                else []
+            )
 
             # Extract and process images
-            images = self._extract_images(result) if self.config.extract_images else []
+            images = (
+                self._extract_images(result)
+                if self.get_config_value("extract_images", False)
+                else []
+            )
 
             # Calculate word count
             word_count = len(content.split()) if content else 0
@@ -87,7 +102,10 @@ class ResultConverter:
 
         except Exception as e:
             self.logger.error(
-                f"Failed to convert Crawl4AI result for {result.url}: {e}"
+                "Failed to convert Crawl4AI result for %s: %s",
+                result.url,
+                e,
+                exc_info=True,
             )
 
             # Return minimal PageContent on error
@@ -164,11 +182,10 @@ class ResultConverter:
             content = str(markdown_obj).strip()
             # Determine if truncated
             truncated = len(content) > 100
-            preview = content[:100] if truncated else content
-            suffix = "..." if truncated else ""
-
+            preview = content[:100]
+            suffix = "…" if truncated else ""
             self.logger.debug(
-                "String conversion result: '%s%s' (length: %d)",
+                "String conversion preview='%s%s' length=%d",
                 preview,
                 suffix,
                 len(content),
@@ -214,7 +231,7 @@ class ResultConverter:
                         links.extend([self._normalize_link(link) for link in internal])
 
                     # External links included when extract_links is True
-                    if self.config.extract_links:
+                    if self.get_config_value("extract_links", False):
                         external = result.links.get("external", [])
                         if isinstance(external, list):
                             links.extend(
@@ -325,18 +342,52 @@ class ResultConverter:
             return False
 
     def _is_valid_image_url(self, img_url: str) -> bool:
-        """Validate image URL"""
-        if not img_url or not isinstance(img_url, str):
+        """Validate image URL with strict validation"""
+        if not img_url or not isinstance(img_url, str) or len(img_url.strip()) == 0:
             return False
 
-        # Check for common image extensions
+        img_url = img_url.strip()
+
+        # Reject obviously invalid URLs
+        if len(img_url) > 2048:  # URL too long
+            return False
+
+        # Check for data URLs first (more specific validation)
+        if img_url.startswith("data:"):
+            return img_url.startswith("data:image/") and "base64," in img_url
+
         try:
             parsed = urlparse(img_url)
+
+            # Only allow http, https schemes
+            if parsed.scheme not in ("http", "https"):
+                return False
+
+            # Require valid netloc for http/https URLs
+            if not parsed.netloc or len(parsed.netloc) < 3:
+                return False
+
             path = parsed.path.lower()
-            return (
-                any(path.endswith(ext) for ext in IMAGE_EXTENSIONS)
-                or "image" in img_url.lower()
-            )
+
+            # Check for valid image extensions (primary validation)
+            if any(path.endswith(ext) for ext in IMAGE_EXTENSIONS):
+                return True
+
+            # More restrictive query parameter validation
+            query_params = parsed.query.lower()
+            image_indicators = [
+                "format=jpg",
+                "format=jpeg",
+                "format=png",
+                "format=webp",
+                "format=gif",
+                "type=image/",
+                "mime=image/",
+                "filetype=image",
+            ]
+            # Return True if any image indicators found, False otherwise
+            return any(indicator in query_params for indicator in image_indicators)
+
         except Exception:
             return False
 
@@ -389,7 +440,7 @@ class ResultConverter:
             )
 
         except Exception as e:
-            self.logger.error(f"Failed to convert batch results: {e}")
+            self.logger.error("Failed to convert batch results: %s", e, exc_info=True)
 
             # Return failed result
             return CrawlResult(
@@ -453,7 +504,7 @@ class ResultConverter:
             )
 
         except Exception as e:
-            self.logger.error(f"Failed to calculate statistics: {e}")
+            self.logger.error("Failed to calculate statistics: %s", e, exc_info=True)
             return CrawlStatistics()
 
     def create_minimal_page_content(
