@@ -200,7 +200,12 @@ class ContentExtractorFactory:
 
         # Use provided robots setting or config default
         if check_robots is None:
-            check_robots = self.get_config_value("check_robots_txt", False)
+            check_robots = bool(
+                self.get_config_value(
+                    "respect_robots_txt",
+                    not bool(self.get_config_value("ignore_robots_txt", True)),
+                )
+            )
 
         rc = CrawlerRunConfig(
             # Content extraction
@@ -208,7 +213,12 @@ class ContentExtractorFactory:
             # Tag filtering to prevent noise
             excluded_tags=excluded_tags,
             # Link handling
-            exclude_external_links=True,  # Focus on domain content
+            exclude_external_links=bool(
+                self.get_config_value(
+                    "exclude_external_links",
+                    not bool(self.get_config_value("include_external_links", False)),
+                )
+            ),
             # Performance and caching
             cache_mode=CacheMode.ENABLED
             if self.get_config_value("cache_enabled", True)
@@ -217,7 +227,7 @@ class ContentExtractorFactory:
             # Content quality thresholds
             word_count_threshold=self.get_config_value("word_threshold", 10),
             # Timing optimizations
-            page_timeout=self.get_config_value("page_timeout", 30),
+            page_timeout=self.get_config_value("page_timeout", 30) * 1000,
             delay_before_return_html=2.0,  # Delay for content loading
         )
 
@@ -246,7 +256,7 @@ class ContentExtractorFactory:
             cache_mode=CacheMode.ENABLED,
             check_robots_txt=False,  # Always ignore robots.txt
             word_count_threshold=20,  # Lower threshold for quality
-            page_timeout=60,  # Longer timeout for quality (seconds)
+            page_timeout=60 * 1000,  # Longer timeout for quality (milliseconds)
             delay_before_return_html=2.0,  # More time for content loading
         )
 
@@ -285,7 +295,7 @@ class ContentExtractorFactory:
             cache_mode=CacheMode.ENABLED,
             check_robots_txt=False,
             word_count_threshold=self.get_config_value("word_threshold", 10),
-            page_timeout=15,  # Shorter timeout (seconds)
+            page_timeout=15 * 1000,  # Shorter timeout (milliseconds)
             delay_before_return_html=0.1,  # Minimal delay
         )
 

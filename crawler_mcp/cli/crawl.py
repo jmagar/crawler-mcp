@@ -440,7 +440,7 @@ async def _run(args: argparse.Namespace) -> int:
         "max_urls_to_discover": args.max_urls,
         "max_concurrent_crawls": args.concurrency,
         "content_validation": args.content_validation,
-        "page_timeout": max(1, int(args.page_timeout_ms / 1000)),
+        "page_timeout": max(1000, args.page_timeout_ms) // 1000,
         "output_dir": args.output_dir,
     }
 
@@ -847,6 +847,16 @@ async def _run(args: argparse.Namespace) -> int:
             "Flag --stream is deprecated; setting ENABLE_STREAMING=1 for this run."
         )
         os.environ.setdefault("ENABLE_STREAMING", "1")
+        try:
+            from ..settings import get_settings
+
+            # Update the singleton settings instance
+            updated_settings = get_settings()
+            updated_settings.enable_streaming = True
+            # Update our local settings reference to match the modified singleton
+            settings = updated_settings
+        except Exception:
+            pass
 
     # Clean outputs if requested
     if args.clean_outputs:

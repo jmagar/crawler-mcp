@@ -338,7 +338,7 @@ class CollectionValidator(BaseValidator):
 
     def _validate_value(self, value: Any, field_name: str) -> ValidationResult:
         # Ensure it's a collection
-        if not hasattr(value, "__len__") or isinstance(value, str | bytes):
+        if not hasattr(value, "__len__") or isinstance(value, (str, bytes)):
             return ValidationResult.failure(f"{field_name} must be a collection")
 
         # Length validation
@@ -357,7 +357,7 @@ class CollectionValidator(BaseValidator):
             unique_items = (
                 set(value)
                 if all(
-                    isinstance(item, str | int | float | bool | type(None))
+                    isinstance(item, (str, int, float, bool, type(None)))
                     for item in value
                 )
                 else []

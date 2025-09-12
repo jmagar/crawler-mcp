@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from crawler_mcp.constants import (
@@ -31,6 +31,9 @@ from crawler_mcp.constants import (
     DEFAULT_PORT,
     DEFAULT_PRUNING_THRESHOLD,
     DEFAULT_REQUEST_TIMEOUT,
+    DEFAULT_RERANKER_MAX_LENGTH,
+    # Reranker constants
+    DEFAULT_RERANKER_TOP_K,
     # Retry
     DEFAULT_RETRY_COUNT,
     DEFAULT_TIMEOUT,
@@ -39,7 +42,10 @@ from crawler_mcp.constants import (
     DEFAULT_VIEWPORT_WIDTH,
     MAX_CHUNK_SIZE,
     MAX_REQUEST_SIZE_BYTES,
+    MAX_RERANKER_MAX_LENGTH,
+    MAX_RERANKER_TOP_K,
     MIN_CHUNK_SIZE,
+    MIN_RERANKER_MAX_LENGTH,
     QDRANT_DEFAULT_TIMEOUT,
     RETRY_EXPONENTIAL_BASE,
     RETRY_INITIAL_DELAY,
@@ -68,7 +74,7 @@ class CrawlerSettings(BaseSettings):
     server_port: int = Field(default=DEFAULT_PORT, ge=1, le=65535)
     server_name: str = "crawler-mcp"
     version: str = "0.1.0"
-    allow_origins: list[str] = ["*"]
+    allow_origins: list[str] = Field(default_factory=lambda: ["*"])
     server_metrics_enabled: bool = True
     request_timeout: int = Field(default=DEFAULT_REQUEST_TIMEOUT, ge=1)
     log_to_file: bool = False
@@ -80,6 +86,9 @@ class CrawlerSettings(BaseSettings):
     qdrant_collection: str = "crawled_pages"
     qdrant_timeout: int = Field(default=QDRANT_DEFAULT_TIMEOUT, ge=1)
     qdrant_search_exact: bool = False
+    qdrant_distance: str = Field(
+        default="cosine", description="Distance metric: cosine|euclidean|dot"
+    )
     qdrant_vector_size: int = Field(
         default=DEFAULT_EMBEDDING_DIMENSION,
         description="Must match embedding_dimension",
@@ -115,6 +124,10 @@ class CrawlerSettings(BaseSettings):
         default=DEFAULT_EMBEDDING_DIMENSION, description="Must be 384, 768, or 1024"
     )
     embedding_max_length: int = Field(default=DEFAULT_EMBEDDING_MAX_LENGTH, ge=1)
+    # Token estimation ratio configuration
+    word_to_token_ratio: float = Field(
+        default=1.4, ge=0.1, le=5.0, alias="WORD_TO_TOKEN_RATIO"
+    )
     embedding_normalize: bool = True
     embedding_max_retries: int = Field(default=DEFAULT_RETRY_COUNT, ge=0)
     chunk_size: int = Field(
@@ -129,9 +142,8 @@ class CrawlerSettings(BaseSettings):
     max_depth: int = Field(default=3, ge=1, le=10)
     max_pages: int = Field(default=DEFAULT_MAX_CRAWL_PAGES, ge=1, alias="MAX_PAGES")
     page_timeout: int = Field(
-        default=int(DEFAULT_PAGE_TIMEOUT / 1000), ge=1
-    )  # Convert ms to seconds
-    delay_between_requests: float = Field(default=1.0, ge=0.0)
+        default=DEFAULT_PAGE_TIMEOUT, ge=1000
+    )  # Keep in milliseconds
     concurrent_requests: int = Field(default=3, ge=1, le=50)
     max_retries: int = Field(default=DEFAULT_RETRY_COUNT, ge=0)
     retry_delay: float = Field(default=RETRY_INITIAL_DELAY, ge=0.1)
@@ -140,15 +152,9 @@ class CrawlerSettings(BaseSettings):
     # DEPRECATION: prefer respect_robots_txt; ignore_robots_txt is derived
     ignore_robots_txt: bool = True
     follow_redirects: bool = True
-    allowed_domains: list[str] = []
-    excluded_patterns: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_EXCLUDED_URL_PATTERNS)
-    )
+    allowed_domains: list[str] = Field(default_factory=list)
     include_external_links: bool = False
     min_content_length: int = Field(default=DEFAULT_MIN_WORD_COUNT, ge=1)
-    crawl_exclude_url_patterns: list[str] = Field(
-        default_factory=lambda: list(DEFAULT_EXCLUDED_URL_PATTERNS)
-    )
     enable_streaming: bool = True  # Re-enabled now that cache is set to BYPASS
     extract_links: bool = True
     extract_images: bool = False
@@ -161,13 +167,29 @@ class CrawlerSettings(BaseSettings):
         default_factory=lambda: list(DEFAULT_EXCLUDED_TAGS)
     )
     enable_content_filter: bool = True
-    content_filter_type: str = ContentFilterType.PRUNING
-    wait_condition: str = WaitCondition.DOM_CONTENT_LOADED
+    content_filter_type: ContentFilterType = ContentFilterType.PRUNING
+    wait_condition: WaitCondition = WaitCondition.DOM_CONTENT_LOADED
     html_delay_seconds: float = 2.0
     enable_text_only_mode: bool = False
-    exclude_external_links: bool = False
+    exclude_external_links: bool = True
+    exclude_social_media_links: bool = True
     remove_forms: bool = False
-    exclude_external_images: bool = False
+    exclude_external_images: bool = True
+    exclude_domains: list[str] = Field(default_factory=list)
+    exclude_social_media_domains: list[str] = Field(
+        default_factory=lambda: [
+            "facebook.com",
+            "twitter.com",
+            "x.com",
+            "linkedin.com",
+            "instagram.com",
+            "pinterest.com",
+            "tiktok.com",
+            "snapchat.com",
+            "reddit.com",
+        ]
+    )
+    process_iframes: bool = False
     crawl_semaphore_count: int = 5
     mean_request_delay: float = 1.0
     max_request_delay_range: float = 2.0
@@ -193,6 +215,8 @@ class CrawlerSettings(BaseSettings):
         ]
     )
     url_score_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
+    # Content-Type filtering
+    allowed_content_types: list[str] = Field(default_factory=lambda: ["text/html"])
 
     # Deduplication Settings (2 settings)
     deduplication_enabled: bool = True
@@ -201,6 +225,14 @@ class CrawlerSettings(BaseSettings):
     # Reranker Settings (3 settings)
     reranker_enabled: bool = False
     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+    reranker_top_k: int = Field(
+        default=DEFAULT_RERANKER_TOP_K, ge=1, le=MAX_RERANKER_TOP_K
+    )
+    reranker_max_length: int = Field(
+        default=DEFAULT_RERANKER_MAX_LENGTH,
+        ge=MIN_RERANKER_MAX_LENGTH,
+        le=MAX_RERANKER_MAX_LENGTH,
+    )
     reranker_fallback_to_custom: bool = True
 
     # Legacy Cache Settings (will be replaced by Enhanced Cache Settings below)
@@ -221,10 +253,13 @@ class CrawlerSettings(BaseSettings):
     oauth_enabled: bool = False
     oauth_provider: str | None = None
     google_base_url: str = "http://localhost:8000"
-    google_scopes_list: list[str] = ["openid", "email", "profile"]
+    google_scopes_list: list[str] = Field(
+        default_factory=lambda: ["openid", "email", "profile"]
+    )
 
     # Logging & Debug (4 settings)
     log_level: str = "INFO"
+    log_format: str = Field(default="console", description="console|json")
     debug: bool = False
     log_file: str | None = None
     uvicorn_log_level: str = "info"
@@ -242,7 +277,9 @@ class CrawlerSettings(BaseSettings):
     browser_width: int = Field(default=DEFAULT_VIEWPORT_WIDTH, ge=800)
     browser_height: int = Field(default=DEFAULT_VIEWPORT_HEIGHT, ge=600)
     browser_user_agent: str | None = None
-    browser_timeout: float = Field(default=float(DEFAULT_PAGE_TIMEOUT / 1000), ge=1.0)
+    browser_timeout: int = Field(
+        default=DEFAULT_PAGE_TIMEOUT, ge=1000
+    )  # Keep in milliseconds
     browser_wait_for: float = Field(default=0.5, ge=0.0)
     browser_sleep_on_close: float = Field(default=0.5, ge=0.0)
     browser_js_enabled: bool = True
@@ -254,9 +291,22 @@ class CrawlerSettings(BaseSettings):
     crawl_delay: float = Field(default=1.0, ge=0.0)
     respect_robots_txt: bool = False
     max_redirects: int = Field(default=5, ge=1, le=20)
-    exclude_patterns: list[str] = Field(default_factory=list)
+    exclude_patterns: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_EXCLUDED_URL_PATTERNS)
+    )
     include_patterns: list[str] = Field(default_factory=list)
     css_selector: str | None = None
+    # Default content scoping to common doc containers (auto-applied)
+    target_elements: list[str] | None = Field(
+        default_factory=lambda: [
+            "main",
+            ".prose",
+            "article",
+            ".content",
+            ".docs-content",
+            '[role="main"]',
+        ]
+    )
     word_threshold: int = Field(default=DEFAULT_MIN_WORD_COUNT, ge=1)
     only_text: bool = False
     extraction_strategy: ExtractionStrategy = ExtractionStrategy.BASIC
@@ -278,8 +328,8 @@ class CrawlerSettings(BaseSettings):
     proxy_enabled: bool = False
     proxy_url: str | None = None
     proxy_type: ProxyType = ProxyType.HTTP
-    proxy_username: str | None = None
-    proxy_password: str | None = None
+    proxy_username: SecretStr | None = None
+    proxy_password: SecretStr | None = None
     proxy_rotation: bool = False
 
     # Performance Settings (8 new settings)
@@ -298,6 +348,20 @@ class CrawlerSettings(BaseSettings):
         extra="ignore",  # Ignore extra environment variables not in the model
         populate_by_name=True,  # Allow both field name and alias for env vars
     )
+
+    def __repr__(self) -> str:
+        """Custom repr that masks sensitive fields."""
+        # Get all field values but mask secrets
+        field_strs = []
+        for field_name, field_value in self.__dict__.items():
+            if (
+                field_name in ("proxy_username", "proxy_password")
+                and field_value is not None
+            ):
+                field_strs.append(f"{field_name}='***'")
+            else:
+                field_strs.append(f"{field_name}={field_value!r}")
+        return f"{self.__class__.__name__}({', '.join(field_strs)})"
 
     @field_validator("embedding_dimension")
     @classmethod
@@ -330,6 +394,14 @@ class CrawlerSettings(BaseSettings):
         v_lower = v.lower()
         if v_lower not in valid_levels:
             raise ValueError(f"uvicorn_log_level must be one of {valid_levels}")
+        return v_lower
+
+    @field_validator("log_format")
+    @classmethod
+    def validate_log_format(cls, v: str) -> str:
+        v_lower = (v or "").lower()
+        if v_lower not in ("console", "json"):
+            raise ValueError("log_format must be 'console' or 'json'")
         return v_lower
 
     # Note: _ensure_positive validator removed - Field() constraints now handle validation

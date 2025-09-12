@@ -22,7 +22,19 @@ from crawl4ai import (
 )
 from crawl4ai.content_filter_strategy import BM25ContentFilter, PruningContentFilter
 from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
+
+try:  # Prefer BestFirst when available
+    from crawl4ai.deep_crawling import BestFirstCrawlingStrategy as _C4BestFirst
+except Exception:
+    _C4BestFirst = None
 from crawl4ai.deep_crawling.filters import FilterChain
+
+try:
+    from crawl4ai.deep_crawling.filters import (
+        ContentTypeFilter as _C4ContentTypeFilter,  # type: ignore
+    )
+except Exception:
+    _C4ContentTypeFilter = None
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
 from crawler_mcp.clients.qdrant_http_client import QdrantClient
@@ -37,6 +49,21 @@ from crawler_mcp.models.responses import OptimizedCrawlResponse
 from crawler_mcp.processing.result_converter import ResultConverter
 from crawler_mcp.settings import CrawlerSettings, get_settings
 from crawler_mcp.utils.monitoring import PerformanceMonitor
+
+# Prefer official Crawl4AI filters/scorers when available
+try:  # DomainFilter may not exist in older versions
+    from crawl4ai.deep_crawling.filters import (
+        DomainFilter as _C4DomainFilter,  # type: ignore
+    )
+except Exception:
+    _C4DomainFilter = None
+
+try:
+    from crawl4ai.deep_crawling.scorers import (  # type: ignore
+        KeywordRelevanceScorer as _C4KeywordRelevanceScorer,
+    )
+except Exception:
+    _C4KeywordRelevanceScorer = None
 
 
 class ExclusionFilter:
@@ -214,9 +241,10 @@ class CrawlOrchestrator:
         # Apply page limit: prefer explicit argument, else global MAX_PAGES
         max_urls = max_urls or self.settings.max_pages
 
-        # Get streaming setting from main config (single source of truth)
-        settings = get_settings()
-        stream = settings.enable_streaming
+        # Get streaming setting from instance settings first, fallback to global
+        stream = getattr(self.settings, "enable_streaming", None)
+        if stream is None:
+            stream = get_settings().enable_streaming
 
         self.logger.info(f"Starting deep crawl of {start_url} (max: {max_urls} pages)")
 
@@ -224,7 +252,10 @@ class CrawlOrchestrator:
         domain = urlparse(start_url).netloc
         self.logger.info(f"Creating URL filter for domain: {domain}")
         # Include only this domain (support absolute and relative)
-        domain_include_filter = DomainIncludeFilter(domain)
+        if _C4DomainFilter is not None:
+            domain_include_filter = _C4DomainFilter(allowed_domains=[domain])
+        else:
+            domain_include_filter = DomainIncludeFilter(domain)
 
         # Proactive exclusion for low-value docs URLs (pre-crawl) via regex
         builtin_exclude_patterns = [r".*__.*__.*", r".*__init__.*"]
@@ -244,7 +275,10 @@ class CrawlOrchestrator:
             try:
                 keywords = self.get_config_value("url_score_keywords", [])
                 weight = 1.0
-                scorer = KeywordURLScorer(keywords=keywords, weight=weight)
+                if _C4KeywordRelevanceScorer is not None:
+                    scorer = _C4KeywordRelevanceScorer(keywords=keywords, weight=weight)
+                else:
+                    scorer = KeywordURLScorer(keywords=keywords, weight=weight)
                 self.logger.info(
                     f"URL scoring enabled: {len(keywords)} keywords, threshold={self.get_config_value('url_score_threshold', 0.6)}"
                 )
@@ -253,21 +287,50 @@ class CrawlOrchestrator:
                 scorer = None
 
         # Create deep crawl strategy with both inclusion and exclusion filters
-        score_thr = self.get_config_value("url_score_threshold", 0.0)
-        self.logger.info(
-            f"Creating BFS strategy: max_depth=3, max_pages={max_urls}, threshold={score_thr} "
-            + ("(scoring enabled)" if scorer else "(scoring disabled)")
+        # Choose BestFirst when scoring is enabled and implementation is available
+        # Build filter chain with optional content-type filter
+        filters_list = [domain_include_filter, builtin_exclude_filter, exclusion_filter]
+        allowed_ctypes = (
+            self.get_config_value("allowed_content_types", ["text/html"]) or []
         )
-        deep_crawl_strategy = BFSDeepCrawlStrategy(
-            max_depth=3,
-            include_external=False,
-            max_pages=max_urls,
-            filter_chain=FilterChain(
-                [domain_include_filter, builtin_exclude_filter, exclusion_filter]
-            ),
-            url_scorer=scorer,
-            score_threshold=score_thr,
-        )
+        if _C4ContentTypeFilter is not None and allowed_ctypes:
+            try:
+                filters_list.append(_C4ContentTypeFilter(allowed_types=allowed_ctypes))
+                self.logger.info(
+                    f"Added ContentTypeFilter to filter chain: {allowed_ctypes}"
+                )
+            except Exception as e:
+                self.logger.debug(f"Failed to add ContentTypeFilter: {e}")
+        filter_chain = FilterChain(filters_list)
+
+        if scorer and _C4BestFirst is not None:
+            self.logger.info(
+                f"Creating BestFirst strategy: max_depth=3, max_pages={max_urls} (scoring enabled)"
+            )
+            deep_crawl_strategy = _C4BestFirst(
+                max_depth=3,
+                include_external=False,
+                max_pages=max_urls,
+                filter_chain=filter_chain,
+                url_scorer=scorer,
+            )
+        else:
+            # Only apply a non-zero threshold when a scorer is active
+            score_thr = (
+                self.get_config_value("url_score_threshold", 0.0) if scorer else 0.0
+            )
+            self.logger.info(
+                f"Creating BFS strategy: max_depth=3, max_pages={max_urls}, threshold={score_thr} "
+                + ("(scoring enabled)" if scorer else "(scoring disabled)")
+            )
+            deep_crawl_strategy = BFSDeepCrawlStrategy(
+                max_depth=3,
+                include_external=False,
+                max_pages=max_urls,
+                filter_chain=filter_chain,
+                url_scorer=scorer,
+                score_threshold=score_thr,
+            )
 
         # Configure crawler with performance optimizations
         browser_config = self._get_optimized_browser_config(start_url)
@@ -295,7 +358,9 @@ class CrawlOrchestrator:
 
         # Execute crawl with enhanced logging
         try:
-            self.logger.info("Executing deep crawl with BFSDeepCrawlStrategy")
+            self.logger.info(
+                f"Executing deep crawl with {type(deep_crawl_strategy).__name__}"
+            )
             self.logger.info(
                 f"Memory threshold: {self.get_config_value('memory_threshold_percent', 80)}%, Max sessions: {self.get_config_value('max_session_permit', 5)}"
             )
@@ -339,7 +404,6 @@ class CrawlOrchestrator:
                                     continue
 
                                 page_count += 1
-                                crawl_results.append(result)
                             except AttributeError as e:
                                 self.logger.error(f"Result processing error: {e}")
                                 continue
@@ -372,18 +436,25 @@ class CrawlOrchestrator:
                                 if redirected_url and redirected_url != original_url:
                                     redirect_info = f" (redirected from {original_url})"
 
+                                should_append = True
                                 if status and not (200 <= int(status) < 300):
                                     self.logger.info(
                                         f"⚠️  Skipping (HTTP {status}) Page {page_count}: {redirected_url or result.url}{redirect_info} ({content_length} chars, {rate:.1f} pages/sec)"
                                     )
-                                elif content_length <= 5:
+                                    should_append = False
+                                elif (
+                                    content_length <= 50
+                                ):  # Increased threshold from 5 to 50
                                     self.logger.info(
-                                        f"⚠️  Skipping (too little content) Page {page_count}: {redirected_url or result.url}{redirect_info} ({content_length} chars, {rate:.1f} pages/sec)"
+                                        f"⚠️  Low content warning - Page {page_count}: {redirected_url or result.url}{redirect_info} ({content_length} chars, {rate:.1f} pages/sec)"
                                     )
+                                    should_append = False
                                 else:
                                     self.logger.info(
                                         f"✅ Page {page_count}: {redirected_url or result.url}{redirect_info} ({content_length} chars, {rate:.1f} pages/sec)"
                                     )
+                                if should_append:
+                                    crawl_results.append(result)
                                 self._trigger_hook(
                                     "page_crawled",
                                     url=result.url,
@@ -471,7 +542,7 @@ class CrawlOrchestrator:
                         clen = _content_len(r)
                         if status and not (200 <= int(status) < 300):
                             continue
-                        if clen <= 5:
+                        if clen <= 50:  # Match streaming mode threshold
                             continue
                         filtered_results.append(r)
 
@@ -764,8 +835,7 @@ class CrawlOrchestrator:
             "deep_crawl_strategy": deep_crawl_strategy,
             "stream": stream,
             "cache_mode": cache_mode,
-            "page_timeout": self.get_config_value("page_timeout", 30)
-            * 1000,  # Convert seconds to milliseconds
+            "page_timeout": self.get_config_value("page_timeout", 30000),
             "word_count_threshold": max(
                 1, self.get_config_value("min_word_count", 5)
             ),  # Reduced from 10 to 5
@@ -773,6 +843,9 @@ class CrawlOrchestrator:
             "excluded_selector": ", ".join(excluded_selectors)
             if excluded_selectors
             else None,
+            # Content scoping (per docs)
+            "css_selector": self.get_config_value("css_selector", None),
+            "target_elements": self.get_config_value("target_elements", None),
             "wait_until": self._serialize_enum_value(
                 self.get_config_value("wait_condition", "domcontentloaded")
             ),
@@ -783,9 +856,21 @@ class CrawlOrchestrator:
             "exclude_external_links": self.get_config_value(
                 "exclude_external_links", False
             ),
+            "exclude_social_media_links": self.get_config_value(
+                "exclude_social_media_links", True
+            ),
+            "exclude_domains": self.get_config_value("exclude_domains", []),
+            "exclude_social_media_domains": self.get_config_value(
+                "exclude_social_media_domains", []
+            ),
             "remove_forms": self.get_config_value("remove_forms", False),
             "exclude_external_images": self.get_config_value(
                 "exclude_external_images", False
+            ),
+            "process_iframes": self.get_config_value("process_iframes", False),
+            # Align with docs: respect robots.txt when configured
+            "check_robots_txt": bool(
+                self.get_config_value("respect_robots_txt", False)
             ),
             "semaphore_count": self.get_config_value("crawl_semaphore_count", 5),
             "mean_delay": self.get_config_value("mean_request_delay", 1.0),

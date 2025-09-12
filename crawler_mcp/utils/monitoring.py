@@ -516,8 +516,8 @@ class PerformanceMonitor:
                 metrics=self.metrics,
             )
 
-        except Exception as e:
-            self.logger.debug("Failed to collect system metrics: %s", e)
+        except Exception:
+            self.logger.debug("Failed to collect system metrics", exc_info=True)
 
     def _classify_error(self, error: str) -> str:
         """Classify error type for tracking"""
@@ -766,7 +766,7 @@ class PerformanceMonitor:
             # Fallback to direct call if queue not started
             try:
                 loop = asyncio.get_running_loop()
-                task = loop.create_task(self.trigger_hook(hook_type, **kwargs))  # noqa: RUF006
+                loop.create_task(self.trigger_hook(hook_type, **kwargs))  # noqa: RUF006
             except RuntimeError:
                 # No event loop running, schedule for later
                 pass
@@ -777,7 +777,7 @@ class PerformanceMonitor:
             # In case of full queue or other errors, fallback to direct execution
             try:
                 loop = asyncio.get_running_loop()
-                task = loop.create_task(self.trigger_hook(hook_type, **kwargs))  # noqa: RUF006, F841  # noqa: F841
+                loop.create_task(self.trigger_hook(hook_type, **kwargs))
             except RuntimeError:
                 # No event loop running, skip hook execution
                 pass
@@ -793,8 +793,10 @@ class PerformanceMonitor:
                     break  # sentinel
                 try:
                     await self.trigger_hook(hook_type, **payload)
-                except Exception as e:
-                    self.logger.debug("Hook worker error for %s: %s", hook_type, e)
+                except Exception:
+                    self.logger.debug(
+                        "Hook worker error for %s", hook_type, exc_info=True
+                    )
                 finally:
                     self._hook_queue.task_done()
         except asyncio.CancelledError:

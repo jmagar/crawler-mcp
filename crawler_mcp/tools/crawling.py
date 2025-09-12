@@ -15,6 +15,7 @@ import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse, urlunparse
 
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError
@@ -24,6 +25,24 @@ from crawler_mcp.middleware.progress import progress_middleware
 from crawler_mcp.models.crawl import PageContent
 from crawler_mcp.settings import get_settings
 from crawler_mcp.utils.output_manager import OutputManager
+
+
+def _sanitize_url_for_logging(url: str) -> str:
+    """Sanitize URL by removing credentials from userinfo component."""
+    try:
+        parsed = urlparse(url)
+        if parsed.username or parsed.password:
+            # Replace credentials with REDACTED
+            sanitized = parsed._replace(
+                netloc=f"REDACTED@{parsed.hostname}"
+                + (f":{parsed.port}" if parsed.port else "")
+            )
+            return urlunparse(sanitized)
+        return url
+    except Exception:
+        # If URL parsing fails, return a generic message to avoid exposing anything
+        return "[URL parsing failed - redacted for security]"
+
 
 _HASH32_40_64_RE = re.compile(
     r"^(?:[0-9a-fA-F]{32}|[0-9a-fA-F]{40}|[0-9a-fA-F]{64}|[A-Za-z0-9]{32})$"
@@ -168,19 +187,34 @@ def _detect_target(
     if target == "localhost" or target.startswith("localhost:"):
         return "website"
 
-    # Check for IPv4 address (with optional port)
-    if re.match(
-        r"^((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}"
-        r"(25[0-5]|2[0-4]\d|1?\d?\d)(:\d+)?(/.*)?$",
-        target,
-    ):
+    # Check for IPv4 address (with optional port) - disallow whitespace in path
+    ipv4_pattern = re.compile(
+        r"""
+        ^
+        ((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}  # IPv4 octets (0-255)
+        (25[0-5]|2[0-4]\d|1?\d?\d)         # Final octet
+        (:\d+)?                            # Optional port number
+        (/\S*)?                            # Optional path (no whitespace allowed)
+        $
+    """,
+        re.VERBOSE,
+    )
+    if ipv4_pattern.fullmatch(target):
         return "website"
 
-    # Check if target looks like a domain/URL without protocol
-    if re.match(
-        r"^[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*(/.*)?$",
-        target,
-    ):
+    # Check if target looks like a domain/URL without protocol - disallow whitespace in path
+    domain_pattern = re.compile(
+        r"""
+        ^
+        [a-zA-Z0-9]                                                                 # First character
+        ([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?                                          # Optional middle chars (max 63 total)
+        (\.[a-zA-Z0-9]([a-zA-Z0-9\-]{0,61}[a-zA-Z0-9])?)*                         # Domain parts
+        (/\S*)?                                                                     # Optional path (no whitespace allowed)
+        $
+    """,
+        re.VERBOSE,
+    )
+    if domain_pattern.fullmatch(target):
         return "website"
 
     raise ToolError(f"Unsupported or undetected target type: {target}")
@@ -251,7 +285,7 @@ async def _crawl_repository(
     max_files: int,
     file_size_limit_bytes: int,
 ) -> tuple[list[PageContent], Path]:
-    await ctx.info(f"Cloning repository: {repo_url}")
+    await ctx.info(f"Cloning repository: {_sanitize_url_for_logging(repo_url)}")
     tmpdir = Path(tempfile.mkdtemp(prefix="repo_crawl_"))
     try:
         try:
@@ -295,7 +329,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
 
         tracker = progress_middleware.create_tracker(f"scrape_{hash(url)}")
         try:
-            await ctx.info(f"Starting scrape of: {url}")
+            await ctx.info(f"Starting scrape of: {_sanitize_url_for_logging(url)}")
             await ctx.report_progress(progress=5, total=100)
 
             rag_enabled = _should_ingest_rag(rag_ingest)
@@ -310,9 +344,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
             if javascript is not None:
                 overrides["javascript_enabled"] = javascript
             if timeout_ms != 30000:  # Only override if different from default
-                overrides["page_timeout"] = max(
-                    1, int(timeout_ms / 1000)
-                )  # Convert ms to seconds
+                overrides["page_timeout"] = timeout_ms  # Keep in milliseconds
             if wait_for is not None:
                 overrides["wait_for"] = wait_for
 
@@ -333,7 +365,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 resp = await strategy.crawl(
                     url,
                     max_urls=1,
-                    max_concurrent=max(1, s.max_concurrent_crawls),
+                    max_concurrent=1,
                 )
                 await ctx.info(
                     f"Strategy returned success: {getattr(resp, 'success', 'unknown')}"
@@ -458,8 +490,6 @@ def register_crawling_tools(mcp: FastMCP) -> None:
 
             # Create overrides dict for runtime configuration
             overrides = {}
-            if limit is not None:
-                overrides["max_pages"] = limit
 
             if limit is None:
                 limit = get_settings().max_pages
@@ -495,7 +525,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
                 resp = await strategy.crawl(
                     url,
                     max_urls=limit_int,
-                    max_concurrent=max(1, s.max_concurrent_crawls),
+                    max_concurrent=max(1, (max_concurrent or s.max_concurrent_crawls)),
                 )
                 pages = getattr(strategy, "get_last_pages", lambda: [])()
                 pages_total = len(pages)

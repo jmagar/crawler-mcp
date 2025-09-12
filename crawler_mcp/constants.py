@@ -241,8 +241,8 @@ class LogFormat(str, Enum):
 class MonitorMode(str, Enum):
     """Crawler monitoring detail levels."""
 
-    DETAILED = "DETAILED"
-    AGGREGATED = "AGGREGATED"
+    DETAILED = "detailed"
+    AGGREGATED = "aggregated"
 
 
 class PruningThresholdType(str, Enum):

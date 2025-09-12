@@ -24,13 +24,13 @@ class ContentHasher:
     @staticmethod
     def hash_content(content: str) -> str:
         """
-        Generate MD5 hash of normalized content.
+        Generate BLAKE2b hash of normalized content.
 
         Args:
             content: Text content to hash
 
         Returns:
-            BLAKE2b hash hexdigest string
+            BLAKE2b hexdigest string (32-byte digest_size)
         """
         return hashlib.blake2b(content.encode("utf-8"), digest_size=32).hexdigest()
 
@@ -343,12 +343,8 @@ class DeduplicationManager(ABC):
         """
         normalized_url = normalize_url(url)
         id_string = f"{normalized_url}:{chunk_index}"
-        # Generate a deterministic UUID from the hash
-        hash_bytes = hashlib.md5(
-            id_string.encode()
-        ).digest()  # MD5 produces exactly 16 bytes
-        # Create UUID from the first 16 bytes of the hash
-        deterministic_uuid = uuid.UUID(bytes=hash_bytes)
+        # RFC 4122 version 3 (MD5) namespace-based deterministic UUID
+        deterministic_uuid = uuid.uuid3(uuid.NAMESPACE_URL, id_string)
         return str(deterministic_uuid)
 
     def calculate_content_similarity(self, content1: str, content2: str) -> float:

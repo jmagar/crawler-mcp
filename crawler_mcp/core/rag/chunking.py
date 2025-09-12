@@ -90,7 +90,7 @@ class TokenCounter:
             configured_ratio = getattr(
                 settings, "word_to_token_ratio", QWEN3_WORD_TO_TOKEN_RATIO
             )
-            if isinstance(configured_ratio, int | float) and configured_ratio > 0:
+            if isinstance(configured_ratio, (int, float)) and configured_ratio > 0:
                 self.word_to_token_ratio = configured_ratio
             else:
                 logger.warning(

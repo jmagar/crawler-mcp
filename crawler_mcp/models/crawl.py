@@ -4,6 +4,7 @@ Data models for web crawling operations.
 
 from __future__ import annotations
 
+import logging
 import math
 from datetime import UTC, datetime
 from enum import Enum
@@ -68,60 +69,32 @@ class PageContent(BaseModel):
     def derive_links_count(cls, v: int | None, info: ValidationInfo) -> int:
         """Derive links_count from links list if not explicitly set, with consistency validation."""
         if info.data and "links" in info.data:
-            try:
-                links = info.data.get("links", [])
-                if not isinstance(links, list):
-                    # Handle case where links might not be a list
-                    links = []
-                actual_count = len(links)
+            links = info.data.get("links", [])
+            if not isinstance(links, list):
+                links = []
+            actual_count = len(links)
 
-                # If count is not provided (None), derive from list
-                if v is None:
-                    return actual_count
+            if v is None or v == 0:
+                return actual_count
 
-                # If count is provided but is 0 and we have links, derive from list
-                if v == 0 and actual_count > 0:
-                    return actual_count
-
-                # Warn about inconsistency if explicitly set count differs significantly
-                if v != actual_count and abs(v - actual_count) > 0:
-                    # For now, trust the explicit count but this could be logged
-                    pass
-
-            except (AttributeError, TypeError):
-                # Fallback if data access fails
-                pass
+            if v != actual_count:
+                logging.getLogger(__name__).debug(
+                    f"Links count mismatch: provided={v}, actual={actual_count}"
+                )
 
         return v if v is not None else 0
 
     @field_validator("images_count", mode="before")
     @classmethod
     def derive_images_count(cls, v: int | None, info: ValidationInfo) -> int:
-        """Derive images_count from images list if not explicitly set, with consistency validation."""
+        """Derive images_count from images list if not explicitly set."""
         if info.data and "images" in info.data:
-            try:
-                images = info.data.get("images", [])
-                if not isinstance(images, list):
-                    # Handle case where images might not be a list
-                    images = []
-                actual_count = len(images)
+            images = info.data.get("images", [])
+            if not isinstance(images, list):
+                images = []
 
-                # If count is not provided (None), derive from list
-                if v is None:
-                    return actual_count
-
-                # If count is provided but is 0 and we have images, derive from list
-                if v == 0 and actual_count > 0:
-                    return actual_count
-
-                # Warn about inconsistency if explicitly set count differs significantly
-                if v != actual_count and abs(v - actual_count) > 0:
-                    # For now, trust the explicit count but this could be logged
-                    pass
-
-            except (AttributeError, TypeError):
-                # Fallback if data access fails
-                pass
+            if v is None or v == 0:
+                return len(images)
 
         return v if v is not None else 0
 
@@ -154,7 +127,7 @@ class PageContent(BaseModel):
             # Check for finite values and valid float types with value bounds
             extreme_values = []
             for i, val in enumerate(v):
-                if not isinstance(val, int | float):
+                if not isinstance(val, (int, float)):
                     raise ValueError(
                         f"Embedding value at index {i} must be numeric, got {type(val)}: {val}"
                     )

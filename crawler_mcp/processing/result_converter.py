@@ -354,7 +354,7 @@ class ResultConverter:
 
         # Check for data URLs first (more specific validation)
         if img_url.startswith("data:"):
-            return img_url.startswith("data:image/") and "base64," in img_url
+            return img_url.startswith("data:image/") and "," in img_url
 
         try:
             parsed = urlparse(img_url)

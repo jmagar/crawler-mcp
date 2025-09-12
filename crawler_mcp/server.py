@@ -38,26 +38,35 @@ from crawler_mcp.tools.rag import register_rag_tools
 
 
 def setup_logging() -> None:
-    """Configure rich colorized logging for the application."""
+    """Configure logging (console or json) based on settings."""
     install(show_locals=settings.debug)
 
-    console = Console(force_terminal=True, width=120)
-    rich_handler = RichHandler(
-        console=console,
-        show_path=settings.debug,
-        show_time=True,
-        rich_tracebacks=True,
-        tracebacks_show_locals=settings.debug,
-        markup=True,
-        log_time_format="[%H:%M:%S]",
-    )
+    level = getattr(logging, settings.log_level.upper())
 
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper()),
-        format="%(message)s",
-        datefmt="[%X]",
-        handlers=[rich_handler],
-    )
+    if settings.log_format == "json":
+        # Simple JSON-style formatter
+        formatter = logging.Formatter(
+            '{"time":"%(asctime)s","level":"%(levelname)s","message":"%(message)s"}',
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        logging.basicConfig(level=level, handlers=[handler])
+    else:
+        # Rich console output
+        console = Console(force_terminal=True, width=120)
+        rich_handler = RichHandler(
+            console=console,
+            show_path=settings.debug,
+            show_time=True,
+            rich_tracebacks=True,
+            tracebacks_show_locals=settings.debug,
+            markup=True,
+            log_time_format="[%H:%M:%S]",
+        )
+        logging.basicConfig(
+            level=level, format="%(message)s", datefmt="[%X]", handlers=[rich_handler]
+        )
 
     if settings.log_to_file and settings.log_file:
         log_path = Path(settings.log_file)
@@ -67,6 +76,7 @@ def setup_logging() -> None:
             maxBytes=5 * 1024 * 1024,  # 5MB
             backupCount=1,  # Keep 1 backup
         )
+        # File logs use a readable format
         file_handler.setFormatter(
             logging.Formatter(
                 "[%(asctime)s] %(levelname)s - %(message)s", datefmt="%H:%M:%S"
@@ -74,6 +84,7 @@ def setup_logging() -> None:
         )
         logging.getLogger().addHandler(file_handler)
 
+    # Quiet noisy libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("selenium").setLevel(logging.WARNING)

@@ -151,7 +151,9 @@ class EmbeddingWorker:
                 else:
                     text_str = str(text)
                 normalized_text = text_str.strip().lower()
-                text_hash = hashlib.md5(normalized_text.encode("utf-8")).hexdigest()
+                text_hash = hashlib.blake2b(
+                    normalized_text.encode("utf-8"), digest_size=32
+                ).hexdigest()
                 text_hashes.append(text_hash)
 
                 cached_embedding = None
@@ -217,7 +219,8 @@ class EmbeddingWorker:
                     final_embeddings.append(emb)
                 else:
                     # This shouldn't happen if logic is correct, but provide fallback
-                    final_embeddings.append([0.0] * settings.embedding_dimension)
+                    dimension = max(0, int(settings.embedding_dimension))
+                    final_embeddings.append([0.0] * dimension)
             return final_embeddings
 
         except Exception as e:
@@ -372,16 +375,29 @@ class EmbeddingPipeline:
                     return [result.embedding for result in embedding_results]
                 else:
                     # Return empty embeddings if service unavailable
-                    return [[0.0] * settings.embedding_dimension] * len(texts)
+                    dimension = max(0, int(settings.embedding_dimension))
+                    return [[0.0] * dimension for _ in range(len(texts))]
 
         # Use parallel batch processing for larger sets
         process_results: list[
             EmbeddingProcessResult
         ] = await self._process_batches_parallel(texts, effective_batch_size)
+
+        # Get runtime embedding dimension from first successful result
+        runtime_dimension = None
+        for result in process_results:
+            if result.success and result.embedding:
+                runtime_dimension = len(result.embedding)
+                break
+
+        # Fallback to settings if no successful embeddings
+        if runtime_dimension is None:
+            runtime_dimension = max(0, int(settings.embedding_dimension))
+
         return [
             result.embedding
             if result.success and result.embedding
-            else [0.0] * settings.embedding_dimension
+            else [0.0] * runtime_dimension
             for result in process_results
         ]
 

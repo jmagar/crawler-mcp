@@ -625,7 +625,7 @@ class RagService:
 
         except Exception as e:
             logger.error(f"Error processing RAG query: {e}")
-            raise ServiceError(f"RAG query failed: {e!s}", cause=e) from e
+            raise ServiceError(f"RAG query failed: {e!s}") from e
 
     async def _rerank_results(
         self,
