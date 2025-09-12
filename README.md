@@ -108,8 +108,8 @@ Perform a comprehensive health check of all services.
 Get detailed information about the server configuration and capabilities.
 
 **Note**: Web crawling limits are configured via environment variables:
-- `CRAWL_MAX_PAGES` (default: 1000) - Maximum pages to crawl per site
-- `CRAWL_MAX_DEPTH` (default: 3) - Maximum crawling depth
+- `MAX_PAGES` (default: 100) - Maximum pages to crawl per site
+- `MAX_DEPTH` (default: 3) - Maximum crawling depth
 
 **With Deduplication (Re-crawls):**
 ```json
@@ -321,7 +321,7 @@ text-embeddings-inference:
 crawler-mcp/
 ├── crawler_mcp/              # Main application package
 │   ├── server.py            # FastMCP server entry point
-│   ├── config.py            # Pydantic settings management
+│   ├── settings.py          # Pydantic settings management (single source of truth)
 │   ├── models/              # Pydantic data models
 │   ├── core/                # Core services (embeddings, vectors, rag, sources)
 │   ├── tools/               # MCP tool implementations

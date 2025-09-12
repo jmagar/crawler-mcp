@@ -18,8 +18,8 @@ from urllib.parse import urlparse
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, project_root)
 
-from crawler_mcp.config import get_settings  # noqa: E402
 from crawler_mcp.core.vectors.statistics import StatisticsCollector  # noqa: E402
+from crawler_mcp.settings import get_settings  # noqa: E402
 
 
 def extract_base_url(full_url: str) -> str:

@@ -372,6 +372,11 @@ BINARY_EXTENSIONS: Final[frozenset[str]] = frozenset(
 DEFAULT_EXCLUDED_URL_PATTERNS: Final[tuple[str, ...]] = (
     # Internal CDN/routing paths
     r".*/_sites/.*",
+    # Fragment identifiers (anchors)
+    r".*#.*",
+    # Auto-generated object pages (typically anchors turned paths)
+    r".*__.*__.*",  # double-underscore patterns like __init__
+    r".*__init__.*",
     # Admin and authentication endpoints
     r".*/admin.*",
     r".*/login.*",

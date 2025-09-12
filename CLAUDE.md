@@ -23,7 +23,7 @@ crawler_mcp/
 ├── docker-compose.yml        # Qdrant and HF TEI services
 ├── crawler_mcp/              # Main application package
 │   ├── __init__.py
-│   ├── config.py           # Pydantic settings management
+│   ├── settings.py         # Pydantic settings management (single source of truth)
 │   ├── server.py           # Main server entry point
 │   ├── prompts/            # Reusable crawling and analysis prompt templates
 │   │   └── __init__.py
@@ -47,8 +47,8 @@ crawler_mcp/
 - Always commit the `uv.lock` file to source control to ensure reproducible builds.
 
 ### Configuration Management
-- Use Pydantic's `BaseSettings` in a `config.py` file to manage settings.
-- Load configuration from environment variables and `.env` files for flexibility across different environments.
+- Use Pydantic's `BaseSettings` in `settings.py` to manage all configuration.
+- Load from environment variables and `.env` files; prefer canonical env names like `MAX_PAGES`.
 
 ### Development Workflow with `fastmcp` CLI
 Use the built-in `fastmcp` command-line interface for an efficient development cycle.

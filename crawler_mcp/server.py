@@ -25,10 +25,11 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install
 
-from crawler_mcp.config import settings
 from crawler_mcp.core import EmbeddingService, RagService, VectorService
 from crawler_mcp.core.logging import get_logger
-from crawler_mcp.optimized_config import OptimizedConfig
+from crawler_mcp.settings import get_settings
+
+settings = get_settings()
 
 # Tool registrations (top-level package)
 from crawler_mcp.tools.crawling import register_crawling_tools
@@ -132,7 +133,7 @@ mcp.add_middleware(ErrorHandlingMiddleware())
 mcp.add_middleware(LoggingMiddleware())
 mcp.add_middleware(TimingMiddleware())
 
-# Register optimized tools for now
+# Register tools
 register_github_pr_tools(mcp)
 register_rag_tools(mcp)
 register_crawling_tools(mcp)
@@ -258,7 +259,7 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
                 if settings.oauth_enabled
                 else None,
             },
-            "optimized_config": OptimizedConfig.from_env().to_dict(),
+            # OptimizedConfig has been removed; settings above reflect active config
             "env_present": {
                 k: (os.environ.get(k) is not None)
                 for k in [

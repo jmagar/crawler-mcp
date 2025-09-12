@@ -16,7 +16,9 @@ from qdrant_client.models import (
     SearchParams,
 )
 
-from ...config import settings
+from crawler_mcp.settings import get_settings
+
+settings = get_settings()
 from ...models.rag import DocumentChunk, SearchMatch
 from .base import BaseVectorService, _parse_timestamp
 

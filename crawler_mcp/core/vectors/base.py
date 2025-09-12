@@ -10,7 +10,9 @@ from dateutil import parser as date_parser
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance
 
-from ...config import settings
+from crawler_mcp.settings import get_settings
+
+settings = get_settings()
 from ..connection_pool import get_pool
 
 logger = logging.getLogger(__name__)

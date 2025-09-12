@@ -11,7 +11,9 @@ import threading
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ...config import settings
+from crawler_mcp.settings import get_settings
+
+settings = get_settings()
 
 
 def safe_strip(content) -> str:

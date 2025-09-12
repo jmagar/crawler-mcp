@@ -15,8 +15,6 @@ from typing import Any
 
 import psutil
 
-from crawler_mcp.optimized_config import OptimizedConfig
-
 
 @dataclass
 class CrawlMetrics:
@@ -64,14 +62,14 @@ class CrawlMetrics:
 class PerformanceMonitor:
     """Monitor crawler performance and provide customizable hooks"""
 
-    def __init__(self, config: OptimizedConfig = None):
+    def __init__(self, config: object | None = None):
         """
         Initialize performance monitor.
 
         Args:
             config: Optional optimized crawler configuration
         """
-        self.config = config or OptimizedConfig()
+        self.config = config
         self.logger = logging.getLogger(__name__)
 
         # Metrics tracking

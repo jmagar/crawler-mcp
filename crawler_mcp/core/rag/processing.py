@@ -13,7 +13,9 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 
-from ...config import settings
+from crawler_mcp.settings import get_settings
+
+settings = get_settings()
 from ...core.vectors import VectorService
 from ...models.crawl import CrawlResult, PageContent
 from ...models.rag import DocumentChunk

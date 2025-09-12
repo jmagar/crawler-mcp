@@ -22,7 +22,7 @@ from crawl4ai import (
 )
 from crawl4ai.content_filter_strategy import BM25ContentFilter, PruningContentFilter
 from crawl4ai.deep_crawling import BFSDeepCrawlStrategy
-from crawl4ai.deep_crawling.filters import FilterChain, URLPatternFilter
+from crawl4ai.deep_crawling.filters import FilterChain
 from crawl4ai.markdown_generation_strategy import DefaultMarkdownGenerator
 
 from crawler_mcp.clients.qdrant_http_client import QdrantClient
@@ -62,6 +62,54 @@ class ExclusionFilter:
     # Back-compat alias if anything already calls .apply()
     def apply(self, url: str) -> bool:  # pragma: no cover
         return self.should_include(url)
+
+
+class DomainIncludeFilter:
+    """Filter to include only URLs from the specified domain."""
+
+    def __init__(self, domain: str):
+        self.domain = domain.lower()
+
+    def should_include(self, url: str) -> bool:
+        try:
+            if not url:
+                return False
+            # Treat root-relative paths as internal
+            if url.startswith("/"):
+                return True
+            parsed = urlparse(url)
+            # If no scheme/netloc, allow (likely relative link)
+            if not parsed.scheme and not parsed.netloc:
+                return True
+            return parsed.netloc.lower() == self.domain
+        except Exception:
+            return False
+
+    def apply(self, url: str) -> bool:  # pragma: no cover
+        return self.should_include(url)
+
+
+class KeywordURLScorer:
+    """Simple keyword-based URL relevance scorer.
+
+    Scores based on presence of any configured keywords in the URL/path.
+    Returns a float in [0, 1].
+    """
+
+    def __init__(self, keywords: list[str], weight: float = 1.0):
+        self.keywords = [k.lower() for k in keywords if k]
+        self.weight = max(0.0, float(weight))
+
+    def score(self, content: str) -> float:  # content = URL string here
+        try:
+            url_l = (content or "").lower()
+            if not url_l or not self.keywords:
+                return 0.0
+            hits = sum(1 for k in self.keywords if k in url_l)
+            base = min(1.0, hits / max(1, len(self.keywords)))
+            return max(0.0, min(1.0, base * self.weight))
+        except Exception:
+            return 0.0
 
 
 class CrawlOrchestrator:
@@ -163,9 +211,8 @@ class CrawlOrchestrator:
             OptimizedCrawlResponse with crawl results
         """
         self.stats["start_time"] = time.time()
-        max_urls = max_urls or self.get_config_value(
-            "max_urls_to_discover", self.settings.max_pages
-        )
+        # Apply page limit: prefer explicit argument, else global MAX_PAGES
+        max_urls = max_urls or self.settings.max_pages
 
         # Get streaming setting from main config (single source of truth)
         settings = get_settings()
@@ -176,44 +223,50 @@ class CrawlOrchestrator:
         # Create domain-based URL filter
         domain = urlparse(start_url).netloc
         self.logger.info(f"Creating URL filter for domain: {domain}")
-        url_filter = URLPatternFilter(
-            patterns=[f"https://{domain}/*", f"http://{domain}/*"]
-        )
+        # Include only this domain (support absolute and relative)
+        domain_include_filter = DomainIncludeFilter(domain)
+
+        # Proactive exclusion for low-value docs URLs (pre-crawl) via regex
+        builtin_exclude_patterns = [r".*#.*", r".*__.*__.*", r".*__init__.*"]
+        builtin_exclude_filter = ExclusionFilter(builtin_exclude_patterns)
 
         # Create exclusion filter using config patterns
         exclusion_patterns = self.get_config_value("crawl_exclude_url_patterns", [])
+        # Keep regex-based exclusion for user patterns
         exclusion_filter = ExclusionFilter(exclusion_patterns)
         self.logger.info(
             f"Created exclusion filter with {len(exclusion_patterns)} patterns"
         )
 
-        # Create relevance scorer with documentation keywords (disabled)
-        # scorer = KeywordRelevanceScorer(
-        #     keywords=[
-        #         "documentation",
-        #         "api",
-        #         "guide",
-        #         "tutorial",
-        #         "docs",
-        #         "reference",
-        #         "manual",
-        #         "help",
-        #         "getting-started",
-        #     ],
-        #     weight=0.7,
-        # )
+        # Optional URL relevance scorer (pre-crawl)
+        scorer = None
+        if self.get_config_value("enable_url_scoring", False):
+            try:
+                keywords = self.get_config_value("url_score_keywords", [])
+                weight = 1.0
+                scorer = KeywordURLScorer(keywords=keywords, weight=weight)
+                self.logger.info(
+                    f"URL scoring enabled: {len(keywords)} keywords, threshold={self.get_config_value('url_score_threshold', 0.6)}"
+                )
+            except Exception as e:
+                self.logger.warning(f"Failed to initialize URL scorer: {e}")
+                scorer = None
 
         # Create deep crawl strategy with both inclusion and exclusion filters
+        score_thr = self.get_config_value("url_score_threshold", 0.0)
         self.logger.info(
-            f"Creating BFS strategy: max_depth=3, max_pages={max_urls}, threshold=0.0 (disabled scoring)"
+            f"Creating BFS strategy: max_depth=3, max_pages={max_urls}, threshold={score_thr} "
+            + ("(scoring enabled)" if scorer else "(scoring disabled)")
         )
         deep_crawl_strategy = BFSDeepCrawlStrategy(
             max_depth=3,
             include_external=False,
             max_pages=max_urls,
-            filter_chain=FilterChain([url_filter, exclusion_filter]),
-            url_scorer=None,  # Disable scoring - it's preventing crawling
-            score_threshold=0.0,  # Accept all URLs that pass filters
+            filter_chain=FilterChain(
+                [domain_include_filter, builtin_exclude_filter, exclusion_filter]
+            ),
+            url_scorer=scorer,
+            score_threshold=score_thr,
         )
 
         # Configure crawler with performance optimizations
@@ -221,6 +274,24 @@ class CrawlOrchestrator:
         config = self._create_optimized_crawler_config(
             deep_crawl_strategy=deep_crawl_strategy, url=start_url, stream=stream
         )
+
+        # Debug configuration that might cause result.success=False
+        self.logger.info(
+            f"Browser config - ignore_https_errors: {getattr(browser_config, 'ignore_https_errors', 'N/A')}"
+        )
+        self.logger.info(
+            f"Crawler config - page_timeout: {getattr(config, 'page_timeout', 'N/A')}ms"
+        )
+        self.logger.info(
+            f"Crawler config - word_count_threshold: {getattr(config, 'word_count_threshold', 'N/A')}"
+        )
+        self.logger.info(
+            f"Crawler config - cache_mode: {getattr(config, 'cache_mode', 'N/A')}"
+        )
+        self.logger.info(
+            f"Follow redirects: {self.get_config_value('follow_redirects', True)}"
+        )
+        self.logger.info(f"Max redirects: {self.get_config_value('max_redirects', 5)}")
 
         # Execute crawl with enhanced logging
         try:
@@ -289,9 +360,27 @@ class CrawlOrchestrator:
                                         )
 
                                 content_length = len(markdown_content)
-                                self.logger.info(
-                                    f"✅ Page {page_count}: {result.url} ({content_length} chars, {rate:.1f} pages/sec)"
-                                )
+                                status = getattr(result, "status_code", None)
+                                redirected_url = getattr(result, "redirected_url", None)
+                                original_url = result.url
+
+                                # Enhanced redirect logging
+                                redirect_info = ""
+                                if redirected_url and redirected_url != original_url:
+                                    redirect_info = f" (redirected from {original_url})"
+
+                                if status and not (200 <= int(status) < 300):
+                                    self.logger.info(
+                                        f"⚠️  Skipping (HTTP {status}) Page {page_count}: {redirected_url or result.url}{redirect_info} ({content_length} chars, {rate:.1f} pages/sec)"
+                                    )
+                                elif content_length <= 5:
+                                    self.logger.info(
+                                        f"⚠️  Skipping (too little content) Page {page_count}: {redirected_url or result.url}{redirect_info} ({content_length} chars, {rate:.1f} pages/sec)"
+                                    )
+                                else:
+                                    self.logger.info(
+                                        f"✅ Page {page_count}: {redirected_url or result.url}{redirect_info} ({content_length} chars, {rate:.1f} pages/sec)"
+                                    )
                                 self._trigger_hook(
                                     "page_crawled",
                                     url=result.url,
@@ -304,9 +393,24 @@ class CrawlOrchestrator:
                                 error_msg = getattr(
                                     result, "error_message", "Unknown error"
                                 )
+                                status = getattr(result, "status_code", "unknown")
+                                redirected_url = getattr(result, "redirected_url", None)
+                                html_length = len(getattr(result, "html", "") or "")
+
+                                # Enhanced failure logging
+                                redirect_info = ""
+                                if redirected_url and redirected_url != url:
+                                    redirect_info = f" (redirected to {redirected_url})"
+
                                 self.logger.warning(
-                                    f"❌ Page {page_count}: {url} - Error: {error_msg}"
+                                    f"❌ Page {page_count}: {url}{redirect_info} - Status: {status}, HTML length: {html_length}, Error: {error_msg}"
                                 )
+
+                                # Critical: This failed result won't contribute to link discovery
+                                if page_count == 1:
+                                    self.logger.error(
+                                        "🚨 CRITICAL: First page failed - this will prevent link discovery and deep crawling!"
+                                    )
                                 self._trigger_hook(
                                     "page_failed",
                                     url=url,
@@ -341,8 +445,31 @@ class CrawlOrchestrator:
                     if not isinstance(crawl_results, list):
                         crawl_results = [crawl_results]
 
+                    def _content_len(r: Any) -> int:
+                        try:
+                            md = getattr(r, "markdown", None)
+                            if isinstance(md, str):
+                                return len(md)
+                            if md and getattr(md, "fit_markdown", None):
+                                return len(md.fit_markdown)
+                            if md and hasattr(md, "raw_markdown"):
+                                return len(md.raw_markdown or "")
+                        except Exception:
+                            return 0
+                        return 0
+
+                    filtered_results: list[Any] = []
+                    for r in crawl_results:
+                        status = getattr(r, "status_code", None)
+                        clen = _content_len(r)
+                        if status and not (200 <= int(status) < 300):
+                            continue
+                        if clen <= 5:
+                            continue
+                        filtered_results.append(r)
+
                     self.stats["pages_crawled"] = len(
-                        [r for r in crawl_results if r.success]
+                        [r for r in filtered_results if r.success]
                     )
                     self.stats["pages_failed"] = len(
                         [r for r in crawl_results if not r.success]
@@ -359,7 +486,10 @@ class CrawlOrchestrator:
 
             # Convert results to our page format
             pages = []
-            for result in crawl_results:
+            source_results = (
+                filtered_results if "filtered_results" in locals() else crawl_results
+            )
+            for result in source_results:
                 if result.success:
                     page = self.result_converter.crawl4ai_to_page_content(result)
                     pages.append(page)
@@ -629,7 +759,9 @@ class CrawlOrchestrator:
             "cache_mode": cache_mode,
             "page_timeout": self.get_config_value("page_timeout", 30)
             * 1000,  # Convert seconds to milliseconds
-            "word_count_threshold": self.get_config_value("min_word_count", 10),
+            "word_count_threshold": max(
+                1, self.get_config_value("min_word_count", 5)
+            ),  # Reduced from 10 to 5
             "excluded_tags": excluded_tags,
             "excluded_selector": ", ".join(excluded_selectors)
             if excluded_selectors

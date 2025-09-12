@@ -146,7 +146,9 @@ class CrawlerSettings(BaseSettings):
     )
     include_external_links: bool = False
     min_content_length: int = Field(default=DEFAULT_MIN_WORD_COUNT, ge=1)
-    crawl_exclude_url_patterns: list[str] = Field(default_factory=list)
+    crawl_exclude_url_patterns: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_EXCLUDED_URL_PATTERNS)
+    )
     enable_streaming: bool = True  # Re-enabled now that cache is set to BYPASS
     extract_links: bool = True
     extract_images: bool = False
@@ -175,6 +177,22 @@ class CrawlerSettings(BaseSettings):
     bm25_user_query: str | None = None
     bm25_threshold: float = 0.5
     enable_url_based_optimization: bool = False
+    # URL scoring (pre-crawl relevance filtering)
+    enable_url_scoring: bool = False
+    url_score_keywords: list[str] = Field(
+        default_factory=lambda: [
+            "documentation",
+            "docs",
+            "api",
+            "guide",
+            "tutorial",
+            "reference",
+            "manual",
+            "help",
+            "getting-started",
+        ]
+    )
+    url_score_threshold: float = Field(default=0.6, ge=0.0, le=1.0)
 
     # Deduplication Settings (2 settings)
     deduplication_enabled: bool = True
