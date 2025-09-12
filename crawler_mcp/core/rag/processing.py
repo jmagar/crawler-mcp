@@ -15,13 +15,14 @@ from typing import Any
 
 from crawler_mcp.settings import get_settings
 
-settings = get_settings()
 from ...core.vectors import VectorService
 from ...models.crawl import CrawlResult, PageContent
 from ...models.rag import DocumentChunk
 from .chunking import AdaptiveChunker
 from .deduplication import VectorDeduplicationManager
 from .embedding import EmbeddingPipeline
+
+settings = get_settings()
 
 logger = logging.getLogger(__name__)
 

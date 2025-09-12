@@ -766,7 +766,9 @@ class PerformanceMonitor:
             # Fallback to direct call if queue not started
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self.trigger_hook(hook_type, **kwargs))  # noqa: RUF006
+                task = loop.create_task(self.trigger_hook(hook_type, **kwargs))
+                # Task reference stored to prevent premature garbage collection
+                _ = task  # Explicitly mark as used
             except RuntimeError:
                 # No event loop running, schedule for later
                 pass
@@ -777,7 +779,9 @@ class PerformanceMonitor:
             # In case of full queue or other errors, fallback to direct execution
             try:
                 loop = asyncio.get_running_loop()
-                loop.create_task(self.trigger_hook(hook_type, **kwargs))
+                task = loop.create_task(self.trigger_hook(hook_type, **kwargs))
+                # Task reference stored to prevent premature garbage collection
+                _ = task  # Explicitly mark as used
             except RuntimeError:
                 # No event loop running, skip hook execution
                 pass

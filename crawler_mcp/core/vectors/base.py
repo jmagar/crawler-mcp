@@ -12,8 +12,9 @@ from qdrant_client.models import Distance
 
 from crawler_mcp.settings import get_settings
 
-settings = get_settings()
 from ..connection_pool import get_pool
+
+settings = get_settings()
 
 logger = logging.getLogger(__name__)
 

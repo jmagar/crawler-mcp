@@ -127,7 +127,7 @@ class PageContent(BaseModel):
             # Check for finite values and valid float types with value bounds
             extreme_values = []
             for i, val in enumerate(v):
-                if not isinstance(val, (int, float)):
+                if not isinstance(val, int | float):
                     raise ValueError(
                         f"Embedding value at index {i} must be numeric, got {type(val)}: {val}"
                     )

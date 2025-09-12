@@ -15,10 +15,11 @@ from typing import Any
 
 from crawler_mcp.settings import get_settings
 
-settings = get_settings()
 from ...core.embeddings import EmbeddingService
 from ...core.vectors import VectorService
 from ...models.rag import DocumentChunk
+
+settings = get_settings()
 
 logger = logging.getLogger(__name__)
 

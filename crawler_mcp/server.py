@@ -29,12 +29,12 @@ from crawler_mcp.core import EmbeddingService, RagService, VectorService
 from crawler_mcp.core.logging import get_logger
 from crawler_mcp.settings import get_settings
 
-settings = get_settings()
-
 # Tool registrations (top-level package)
 from crawler_mcp.tools.crawling import register_crawling_tools
 from crawler_mcp.tools.github_pr_tools import register_github_pr_tools
 from crawler_mcp.tools.rag import register_rag_tools
+
+settings = get_settings()
 
 
 def setup_logging() -> None:
