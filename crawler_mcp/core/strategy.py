@@ -227,7 +227,7 @@ class CrawlOrchestrator:
         domain_include_filter = DomainIncludeFilter(domain)
 
         # Proactive exclusion for low-value docs URLs (pre-crawl) via regex
-        builtin_exclude_patterns = [r".*#.*", r".*__.*__.*", r".*__init__.*"]
+        builtin_exclude_patterns = [r".*__.*__.*", r".*__init__.*"]
         builtin_exclude_filter = ExclusionFilter(builtin_exclude_patterns)
 
         # Create exclusion filter using config patterns
@@ -313,9 +313,12 @@ class CrawlOrchestrator:
                     self.logger.info("Starting streaming crawl...")
                     try:
                         # Stream mode - process results as they arrive
-                        async for result in await crawler.arun(
-                            start_url, config=config
-                        ):
+                        crawl_generator = await crawler.arun(start_url, config=config)
+                        self.logger.info(
+                            f"Got crawl generator: {type(crawl_generator)}"
+                        )
+
+                        async for result in crawl_generator:
                             try:
                                 # Validate result is actually a CrawlResult object
                                 if result is None:
@@ -437,6 +440,10 @@ class CrawlOrchestrator:
                     except Exception:
                         self.logger.exception("Error during stream iteration")
                         raise
+                    finally:
+                        self.logger.info(
+                            f"Stream iteration ended after {page_count} pages"
+                        )
 
                 else:
                     # Non-stream mode - get all results at once
