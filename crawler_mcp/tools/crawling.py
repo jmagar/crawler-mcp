@@ -8,6 +8,7 @@ Qdrant are configured, unless explicitly overridden per-call.
 
 from __future__ import annotations
 
+import ipaddress
 import os
 import re
 import shutil
@@ -25,6 +26,36 @@ from crawler_mcp.middleware.progress import progress_middleware
 from crawler_mcp.models.crawl import PageContent
 from crawler_mcp.settings import get_settings
 from crawler_mcp.utils.output_manager import OutputManager
+
+# Compiled regex patterns for performance
+IPV4_PATTERN = re.compile(
+    r"""
+    ^
+    ((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}  # IPv4 octets (0-255)
+    (25[0-5]|2[0-4]\d|1?\d?\d)         # Final octet
+    (:\d+)?                            # Optional port number
+    (/\S*)?                            # Optional path (no whitespace allowed)
+    $
+    """,
+    re.VERBOSE,
+)
+
+
+def _is_local_or_ip_address(hostname: str) -> bool:
+    """Check if hostname is localhost or an IP address."""
+    if not hostname:
+        return False
+
+    # Check for localhost
+    if hostname.lower() == "localhost":
+        return True
+
+    # Check for IP address
+    try:
+        ipaddress.ip_address(hostname)
+        return True
+    except ValueError:
+        return False
 
 
 def _sanitize_url_for_logging(url: str) -> str:
@@ -188,18 +219,7 @@ def _detect_target(
         return "website"
 
     # Check for IPv4 address (with optional port) - disallow whitespace in path
-    ipv4_pattern = re.compile(
-        r"""
-        ^
-        ((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}  # IPv4 octets (0-255)
-        (25[0-5]|2[0-4]\d|1?\d?\d)         # Final octet
-        (:\d+)?                            # Optional port number
-        (/\S*)?                            # Optional path (no whitespace allowed)
-        $
-    """,
-        re.VERBOSE,
-    )
-    if ipv4_pattern.fullmatch(target):
+    if IPV4_PATTERN.fullmatch(target):
         return "website"
 
     # Check if target looks like a domain/URL without protocol - disallow whitespace in path
@@ -342,7 +362,7 @@ def register_crawling_tools(mcp: FastMCP) -> None:
             if css_selector is not None:
                 overrides["css_selector"] = css_selector
             if javascript is not None:
-                overrides["javascript_enabled"] = javascript
+                overrides["browser_js_enabled"] = javascript
             if timeout_ms != 30000:  # Only override if different from default
                 overrides["page_timeout"] = timeout_ms  # Keep in milliseconds
             if wait_for is not None:
@@ -476,10 +496,33 @@ def register_crawling_tools(mcp: FastMCP) -> None:
         """Unified Smart Crawling: website, directory, repository, or GitHub PR."""
         kind = _detect_target(target)
 
-        # Auto-add https:// protocol for website targets without protocol
+        # Auto-add protocol for website targets without protocol
         if kind == "website" and not re.match(r"^https?://", target, re.IGNORECASE):
-            target = f"https://{target}"
-            await ctx.info(f"Auto-detected website, using: {target}")
+            # Parse the target to extract hostname (handle host:port format)
+            # Split on first '/' to separate host:port from path
+            host_part = target.split("/", 1)[0]
+            # Split on ':' to get just the hostname (ignore port)
+            hostname = host_part.split(":")[0]
+
+            # Use http:// for localhost and IP addresses, https:// for everything else
+            if _is_local_or_ip_address(hostname):
+                target = f"http://{target}"
+            else:
+                target = f"https://{target}"
+
+            # Sanitize URL for logging to prevent credential leakage
+            parsed = urlparse(target)
+            sanitized_target = urlunparse(
+                (
+                    parsed.scheme,
+                    f"***@{parsed.hostname}" if parsed.username else parsed.netloc,
+                    parsed.path,
+                    parsed.params,
+                    parsed.query,
+                    parsed.fragment,
+                )
+            )
+            await ctx.info(f"Auto-detected website, using: {sanitized_target}")
 
         tracker = progress_middleware.create_tracker(f"crawl_{hash(target)}")
         try:

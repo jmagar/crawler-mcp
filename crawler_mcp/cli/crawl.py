@@ -440,7 +440,7 @@ async def _run(args: argparse.Namespace) -> int:
         "max_urls_to_discover": args.max_urls,
         "max_concurrent_crawls": args.concurrency,
         "content_validation": args.content_validation,
-        "page_timeout": max(1000, args.page_timeout_ms) // 1000,
+        "page_timeout": max(1000, args.page_timeout_ms),
         "output_dir": args.output_dir,
     }
 
@@ -453,7 +453,7 @@ async def _run(args: argparse.Namespace) -> int:
             {
                 "max_concurrent_crawls": max(args.concurrency, 20),
                 "memory_threshold_percent": 85,
-                "page_timeout": 15,  # seconds
+                "page_timeout": 15000,  # milliseconds
             }
         )
 
@@ -463,9 +463,7 @@ async def _run(args: argparse.Namespace) -> int:
             {
                 "max_concurrent_crawls": max(args.concurrency, 28),
                 "memory_threshold_percent": 85,
-                "page_timeout": min(
-                    int(args.page_timeout_ms) // 1000, 15
-                ),  # convert ms to seconds
+                "page_timeout": min(int(args.page_timeout_ms), 15000),  # milliseconds
             }
         )
 
@@ -474,6 +472,7 @@ async def _run(args: argparse.Namespace) -> int:
 
     if args.javascript is not None:
         overrides["browser_mode"] = "full" if bool(args.javascript) else "text"
+        overrides["browser_js_enabled"] = bool(args.javascript)
 
     # JS retry removed - using browser_mode configuration instead
 
@@ -603,7 +602,12 @@ async def _run(args: argparse.Namespace) -> int:
 
         async with QdrantClient(
             overrides.get("qdrant_url", settings.qdrant_url),
-            api_key=overrides.get("qdrant_api_key", settings.qdrant_api_key),
+            api_key=overrides.get(
+                "qdrant_api_key",
+                settings.qdrant_api_key.get_secret_value()
+                if settings.qdrant_api_key
+                else None,
+            ),
             timeout_s=15.0,
         ) as qc:
             res = await qc.search(
@@ -1010,7 +1014,12 @@ async def _run(args: argparse.Namespace) -> int:
 
                 qurl = overrides.get("qdrant_url", settings.qdrant_url)
                 qcol = overrides.get("qdrant_collection", settings.qdrant_collection)
-                qkey = overrides.get("qdrant_api_key", settings.qdrant_api_key)
+                qkey = overrides.get(
+                    "qdrant_api_key",
+                    settings.qdrant_api_key.get_secret_value()
+                    if settings.qdrant_api_key
+                    else None,
+                )
                 async with QdrantClient(qurl, api_key=qkey, timeout_s=15.0) as qc:
                     info = await qc.get_collection(qcol)
                     cnt = await qc.count_points(qcol, exact=False)

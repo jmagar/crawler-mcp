@@ -2,7 +2,7 @@
 
 A powerful, production-ready Model Context Protocol (MCP) server that combines advanced web crawling capabilities with semantic search through RAG (Retrieval-Augmented Generation). Built with **FastMCP 2.0**, **Crawl4AI 0.7.0**, **Qdrant vector database**, and **Qwen3-Embedding-0.6B** for multilingual semantic understanding.
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP](https://img.shields.io/badge/FastMCP-2.0-green.svg)](https://github.com/jlowin/fastmcp)
 [![Crawl4AI](https://img.shields.io/badge/Crawl4AI-0.7.0-orange.svg)](https://github.com/unclecode/crawl4ai)
 [![Qdrant](https://img.shields.io/badge/Qdrant-1.15.1-red.svg)](https://qdrant.tech/)
@@ -34,7 +34,7 @@ A powerful, production-ready Model Context Protocol (MCP) server that combines a
 
 ### Prerequisites
 - Docker & Docker Compose
-- Python 3.9+
+- Python 3.11+
 - 8GB+ RAM recommended
 - NVIDIA GPU (optional, for TEI acceleration)
 
@@ -108,6 +108,7 @@ Perform a comprehensive health check of all services.
 Get detailed information about the server configuration and capabilities.
 
 **Note**: Web crawling limits are configured via environment variables:
+
 - `MAX_PAGES` (default: 100) - Maximum pages to crawl per site
 - `MAX_DEPTH` (default: 3) - Maximum crawling depth
 
@@ -239,7 +240,7 @@ graph TB
 ```bash
 # Vector Database
 QDRANT_URL=http://localhost:7000
-QDRANT_COLLECTION=crawlerr_documents
+QDRANT_COLLECTION=crawler_documents
 
 # Text Embeddings Inference
 TEI_URL=http://localhost:8080

@@ -78,8 +78,8 @@ async def extract_all_base_urls() -> dict[str, int]:
 
         print("Extracting URLs from Qdrant database...")
 
+        client = await stats_collector._get_client()  # TODO: expose public method
         while True:
-            client = await stats_collector._get_client()
             result = await client.scroll(
                 collection_name=settings.qdrant_collection,
                 limit=limit,
@@ -87,9 +87,14 @@ async def extract_all_base_urls() -> dict[str, int]:
                 with_payload=True,
                 with_vectors=False,  # We don't need embeddings
             )
-
-            points = result[0]
-            next_offset = result[1]
+            # Support both tuple and object responses
+            if hasattr(result, "points"):
+                points = result.points
+                next_offset = getattr(
+                    result, "next_offset", getattr(result, "offset", None)
+                )
+            else:
+                points, next_offset = result
 
             if not points:
                 break

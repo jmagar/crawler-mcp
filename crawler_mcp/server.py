@@ -13,6 +13,7 @@ import os
 import signal
 import sys
 from datetime import UTC
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -41,7 +42,8 @@ def setup_logging() -> None:
     """Configure logging (console or json) based on settings."""
     install(show_locals=settings.debug)
 
-    level = getattr(logging, settings.log_level.upper())
+    level_name = settings.log_level.lower()
+    level = getattr(logging, level_name.upper(), logging.DEBUG)
 
     if settings.log_format == "json":
         # Simple JSON-style formatter
@@ -71,10 +73,15 @@ def setup_logging() -> None:
     if settings.log_to_file and settings.log_file:
         log_path = Path(settings.log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.handlers.RotatingFileHandler(
+
+        # Use configurable rotation settings if available, otherwise use defaults
+        max_bytes = getattr(settings, "log_rotation_size_mb", 5) * 1024 * 1024
+        backup_count = getattr(settings, "log_rotation_backups", 1)
+
+        file_handler = RotatingFileHandler(
             log_path,
-            maxBytes=5 * 1024 * 1024,  # 5MB
-            backupCount=1,  # Keep 1 backup
+            maxBytes=max_bytes,
+            backupCount=backup_count,
         )
         # File logs use a readable format
         file_handler.setFormatter(
@@ -306,9 +313,6 @@ async def get_user_info(ctx: Context) -> dict[str, Any]:
 
         # Inform client that we're retrieving user info
         await ctx.info("Retrieving authenticated user info")
-        token = get_access_token()
-        if not token:
-            raise ToolError("No authentication token found")
 
         # Extract and validate token claims
         claims = token.claims

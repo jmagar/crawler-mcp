@@ -29,7 +29,24 @@ else:
     DefaultMarkdownGenerator = _RuntimeDefaultMarkdownGenerator
     PruningContentFilter = _RuntimePruningContentFilter
 
+from crawler_mcp.constants import (
+    AGGRESSIVE_PAGE_TIMEOUT_MS,
+    CONSERVATIVE_PAGE_TIMEOUT_MS,
+)
 from crawler_mcp.settings import CrawlerSettings
+
+
+def normalize_timeout(value: int | float) -> int:
+    """
+    Normalize timeout value to milliseconds.
+
+    Args:
+        value: Timeout value (treated as ms if >= 1000, as seconds if < 1000)
+
+    Returns:
+        Timeout value in milliseconds
+    """
+    return int(value) if value >= 1000 else int(value * 1000)
 
 
 class ContentExtractorFactory:
@@ -74,12 +91,12 @@ class ContentExtractorFactory:
         actual_content_threshold = (
             content_threshold
             if content_threshold is not None
-            else self.get_config_value("content_threshold", 0.45)
+            else self.get_config_value("pruning_threshold", 0.45)
         )
         actual_min_word_threshold = (
             min_word_threshold
             if min_word_threshold is not None
-            else self.get_config_value("min_word_threshold", 5)
+            else self.get_config_value("pruning_min_words", 5)
         )
 
         # FIXED: Properly configure PruningContentFilter to avoid hash placeholders
@@ -225,9 +242,11 @@ class ContentExtractorFactory:
             else CacheMode.BYPASS,
             check_robots_txt=check_robots,
             # Content quality thresholds
-            word_count_threshold=self.get_config_value("word_threshold", 10),
+            word_count_threshold=self.get_config_value("min_word_count", 10),
             # Timing optimizations
-            page_timeout=self.get_config_value("page_timeout", 30) * 1000,
+            page_timeout=self.get_config_value(
+                "page_timeout", 30000
+            ),  # Already in milliseconds
             delay_before_return_html=2.0,  # Delay for content loading
         )
 
@@ -256,7 +275,7 @@ class ContentExtractorFactory:
             cache_mode=CacheMode.ENABLED,
             check_robots_txt=False,  # Always ignore robots.txt
             word_count_threshold=20,  # Lower threshold for quality
-            page_timeout=60 * 1000,  # Longer timeout for quality (milliseconds)
+            page_timeout=CONSERVATIVE_PAGE_TIMEOUT_MS,  # Longer timeout for quality
             delay_before_return_html=2.0,  # More time for content loading
         )
 
@@ -294,8 +313,8 @@ class ContentExtractorFactory:
             exclude_external_links=True,
             cache_mode=CacheMode.ENABLED,
             check_robots_txt=False,
-            word_count_threshold=self.get_config_value("word_threshold", 10),
-            page_timeout=15 * 1000,  # Shorter timeout (milliseconds)
+            word_count_threshold=self.get_config_value("min_word_count", 10),
+            page_timeout=AGGRESSIVE_PAGE_TIMEOUT_MS,  # Shorter timeout
             delay_before_return_html=0.1,  # Minimal delay
         )
 

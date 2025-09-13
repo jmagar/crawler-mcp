@@ -74,6 +74,12 @@ class SearchEngine(BaseVectorService):
             # Optimize search parameters based on query complexity
             search_params = await self._optimize_search_params(limit)
 
+            # Validate vector dimension
+            if len(query_vector) != self.vector_size:
+                raise ToolError(
+                    f"Query vector size {len(query_vector)} != expected {self.vector_size}"
+                )
+
             # Perform search using modern query_points API
             client = await self._get_client()
             query_response = await client.query_points(
@@ -107,16 +113,22 @@ class SearchEngine(BaseVectorService):
 
         Args:
             source_filter: Filter by source URLs
-            date_range: Filter by date range
+            date_range: Filter by date range as datetimes
 
         Returns:
             Qdrant Filter object or None if no filters
         """
         filter_conditions: list[FieldCondition] = []
+        should_conditions: list[FieldCondition] = []
 
+        # OR-match both "source_url" and "url" keys for source filtering
         if source_filter:
-            filter_conditions.append(
-                FieldCondition(key="source_url", match=MatchAny(any=source_filter))
+            any_match = MatchAny(any=source_filter)
+            should_conditions.extend(
+                [
+                    FieldCondition(key="source_url", match=any_match),
+                    FieldCondition(key="url", match=any_match),
+                ]
             )
 
         # Add date range filtering using a single Range
@@ -133,8 +145,11 @@ class SearchEngine(BaseVectorService):
                 )
 
         # Return filter if we have conditions
-        if filter_conditions:
-            return Filter(must=list(filter_conditions))
+        if filter_conditions or should_conditions:
+            return Filter(
+                must=list(filter_conditions) if filter_conditions else None,
+                should=should_conditions or None,
+            )
         return None
 
     async def _optimize_search_params(self, limit: int) -> SearchParams:

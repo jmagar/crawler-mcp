@@ -6,9 +6,14 @@ This avoids depending on OptimizedConfig and uses the unified settings.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from crawl4ai import BrowserConfig
+if TYPE_CHECKING:
+    from crawl4ai import BrowserConfig
+else:
+    from crawl4ai import BrowserConfig as _RuntimeBrowserConfig
+
+    BrowserConfig = _RuntimeBrowserConfig  # type: ignore[assignment]
 
 from crawler_mcp.constants import (
     MINIMAL_VIEWPORT_HEIGHT,
@@ -56,13 +61,33 @@ class BrowserFactory:
             "viewport_height": int(
                 self._get("browser_height", MINIMAL_VIEWPORT_HEIGHT)
             ),
-            "light_mode": True,
+            "light_mode": bool(self._get("light_mode", True)),
             "java_script_enabled": bool(self._get("browser_js_enabled", True)),
+            "extra_args": list(self._get("extra_args", [])),
         }
 
+    def _get_headless_mode(self) -> bool:
+        """Determine headless mode based on browser_mode setting."""
+        mode = self._get("browser_mode", BrowserMode.HEADLESS)
+        if isinstance(mode, str):
+            try:
+                mode = BrowserMode(mode)
+            except Exception:
+                mode = BrowserMode.HEADLESS
+        # FULL mode is not headless, all others are headless
+        return mode is not BrowserMode.FULL
+
     def _create_full_config(self) -> BrowserConfig:
-        # Use headless by default for WSL2 compatibility
-        headless = True  # Always headless for now
+        # Get the browser mode from settings/overrides
+        mode = self._get("browser_mode", BrowserMode.HEADLESS)
+        if isinstance(mode, str):
+            try:
+                mode = BrowserMode(mode)
+            except Exception:
+                mode = BrowserMode.HEADLESS
+
+        # Set headless to False when mode is FULL, True otherwise
+        headless = False if mode == BrowserMode.FULL else True
         return BrowserConfig(
             headless=headless,
             **self._base_kwargs(),
@@ -76,7 +101,8 @@ class BrowserFactory:
                 "java_script_enabled": False,
             }
         )
-        return BrowserConfig(headless=True, **kwargs)
+        headless = self._get_headless_mode()
+        return BrowserConfig(headless=headless, **kwargs)
 
     def _create_minimal_config(self) -> BrowserConfig:
         kwargs = self._base_kwargs()
@@ -88,4 +114,5 @@ class BrowserFactory:
                 "viewport_height": MINIMAL_VIEWPORT_HEIGHT,
             }
         )
-        return BrowserConfig(headless=True, **kwargs)
+        headless = self._get_headless_mode()
+        return BrowserConfig(headless=headless, **kwargs)

@@ -9,7 +9,7 @@ import logging
 import time
 from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from crawl4ai.models import CrawlResult as Crawl4AIResult
 
@@ -101,9 +101,36 @@ class ResultConverter:
             )
 
         except Exception as e:
+            # Safely get URL, defaulting to "<unknown>" if not available
+            url_for_logging = getattr(result, "url", "<unknown>")
+
+            # Sanitize URL to remove any credentials before logging (if URL exists)
+            if url_for_logging != "<unknown>":
+                try:
+                    parsed = urlsplit(url_for_logging)
+                    # Remove userinfo (username:password@) from netloc if present
+                    if "@" in parsed.netloc:
+                        # Split on @ and keep only the host:port part
+                        sanitized_netloc = parsed.netloc.split("@", 1)[1]
+                    else:
+                        sanitized_netloc = parsed.netloc
+                    # Reconstruct URL without credentials
+                    url_for_logging = urlunsplit(
+                        (
+                            parsed.scheme,
+                            sanitized_netloc,
+                            parsed.path,
+                            parsed.query,
+                            parsed.fragment,
+                        )
+                    )
+                except Exception:
+                    # If sanitization fails, use the original URL
+                    pass
+
             self.logger.error(
                 "Failed to convert Crawl4AI result for %s: %s",
-                result.url,
+                url_for_logging,
                 e,
                 exc_info=True,
             )
@@ -373,20 +400,18 @@ class ResultConverter:
             if any(path.endswith(ext) for ext in IMAGE_EXTENSIONS):
                 return True
 
-            # More restrictive query parameter validation
-            query_params = parsed.query.lower()
-            image_indicators = [
-                "format=jpg",
-                "format=jpeg",
-                "format=png",
-                "format=webp",
-                "format=gif",
-                "type=image/",
-                "mime=image/",
-                "filetype=image",
-            ]
-            # Return True if any image indicators found, False otherwise
-            return any(indicator in query_params for indicator in image_indicators)
+            # More restrictive query parameter validation using proper parsing
+            from urllib.parse import parse_qs
+
+            qs = {
+                k.lower(): [v.lower() for v in vals]
+                for k, vals in parse_qs(parsed.query).items()
+            }
+            if set(qs.get("format", [])) & {"jpg", "jpeg", "png", "webp", "gif"}:
+                return True
+            if any(val.startswith("image/") for vals in qs.values() for val in vals):
+                return True
+            return False
 
         except Exception:
             return False

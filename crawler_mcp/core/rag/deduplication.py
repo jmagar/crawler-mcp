@@ -18,6 +18,28 @@ from ..utils import normalize_url
 logger = logging.getLogger(__name__)
 
 
+def generate_point_id(url: str, chunk_index: str | int) -> int:
+    """
+    Generate stable 64-bit integer point ID for Qdrant from URL and chunk index.
+
+    This function creates deterministic IDs suitable for Qdrant upsert operations,
+    which require stable int64 point IDs rather than UUID strings.
+
+    Args:
+        url: Source URL
+        chunk_index: Index of the chunk within the document
+
+    Returns:
+        Stable 64-bit integer ID suitable for Qdrant
+    """
+    normalized_url = normalize_url(url)
+    id_string = f"{normalized_url}:{chunk_index}"
+    # Use BLAKE2b with 8 bytes digest for stable 64-bit integer
+    hash_bytes = hashlib.blake2b(id_string.encode("utf-8"), digest_size=8).digest()
+    # Convert to unsigned 64-bit integer using big-endian byte order
+    return int.from_bytes(hash_bytes, byteorder="big", signed=False)
+
+
 class ContentHasher:
     """Content hashing utilities for deduplication."""
 
@@ -33,6 +55,11 @@ class ContentHasher:
             BLAKE2b hexdigest string (32-byte digest_size)
         """
         return hashlib.blake2b(content.encode("utf-8"), digest_size=32).hexdigest()
+
+    @staticmethod
+    def hash_content_sha256(content: str) -> str:
+        """Legacy SHA-256 hash for backwards compatibility."""
+        return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     @staticmethod
     def hash_chunk_metadata(chunk: DocumentChunk) -> str:
@@ -179,7 +206,7 @@ class SimilarityDetector:
             text1, text2 = text2, text1
 
         if len(text2) == 0:
-            return 0.0
+            return 1.0 if len(text1) == 0 else 0.0
 
         # Create distance matrix
         previous_row = list(range(len(text2) + 1))
@@ -291,13 +318,21 @@ class DeduplicationManager(ABC):
         }
 
         for chunk in chunks:
-            content_hash = self.generate_content_hash(chunk.content)
+            normalized = self.hasher.normalize_whitespace(chunk.content)
+            content_hash = self.hasher.hash_content(normalized)
             chunk.content_hash = content_hash
 
             # Check for exact hash match
             if content_hash in existing_hashes:
                 duplicate_chunks.append(chunk)
-                logger.debug(f"Exact duplicate found for chunk {chunk.id}")
+                logger.debug("Exact duplicate found for chunk %s", chunk.id)
+                continue
+
+            # Back-compat: also try legacy SHA-256
+            legacy_sha = self.hasher.hash_content_sha256(normalized)
+            if legacy_sha in existing_hashes:
+                duplicate_chunks.append(chunk)
+                logger.debug("Legacy SHA-256 duplicate found for chunk %s", chunk.id)
                 continue
 
             # Check for near-duplicates using similarity detection
@@ -310,7 +345,9 @@ class DeduplicationManager(ABC):
                 _, existing_chunk, similarity = near_duplicates[0]
                 duplicate_chunks.append(chunk)
                 logger.debug(
-                    f"Near-duplicate found for chunk {chunk.id} with similarity {similarity:.3f}"
+                    "Near-duplicate found for chunk %s with similarity %.3f",
+                    chunk.id,
+                    similarity,
                 )
             else:
                 unique_chunks.append(chunk)
@@ -330,7 +367,7 @@ class DeduplicationManager(ABC):
         normalized_content = self.hasher.normalize_whitespace(content)
         return self.hasher.hash_content(normalized_content)
 
-    def generate_deterministic_id(self, url: str, chunk_index: str | int) -> str:
+    def generate_deterministic_id(self, url: str, chunk_index: str | int) -> int:
         """
         Generate deterministic ID from URL and chunk index.
 
@@ -339,13 +376,27 @@ class DeduplicationManager(ABC):
             chunk_index: Index of the chunk within the document
 
         Returns:
-            Deterministic UUID string
+            Deterministic integer ID for Qdrant (64-bit positive integer)
         """
         normalized_url = normalize_url(url)
         id_string = f"{normalized_url}:{chunk_index}"
         # RFC 4122 version 3 (MD5) namespace-based deterministic UUID
         deterministic_uuid = uuid.uuid3(uuid.NAMESPACE_URL, id_string)
-        return str(deterministic_uuid)
+        # Convert UUID to 64-bit positive integer (use lower 64 bits)
+        return deterministic_uuid.int & 0x7FFFFFFFFFFFFFFF  # Ensure positive 64-bit int
+
+    def generate_point_id(self, url: str, chunk_index: str | int) -> int:
+        """
+        Generate stable 64-bit integer point ID for Qdrant from URL and chunk index.
+
+        Args:
+            url: Source URL
+            chunk_index: Index of the chunk within the document
+
+        Returns:
+            Stable 64-bit integer ID suitable for Qdrant
+        """
+        return generate_point_id(url, chunk_index)
 
     def calculate_content_similarity(self, content1: str, content2: str) -> float:
         """
@@ -500,11 +551,13 @@ class DeduplicationManager(ABC):
         Returns:
             Matching chunk or None
         """
-        content_hash = self.generate_content_hash(content)
+        normalized = self.hasher.normalize_whitespace(content)
+        content_hash = self.hasher.hash_content(normalized)
+        legacy_sha = self.hasher.hash_content_sha256(normalized)
 
         for chunk in existing_chunks:
-            # Direct content hash comparison
-            if chunk.get("content_hash") == content_hash:
+            # Check both current and legacy hash formats
+            if chunk.get("content_hash") in (content_hash, legacy_sha):
                 return chunk
 
             # Fallback: direct content comparison for chunks without hashes
@@ -591,11 +644,11 @@ class VectorDeduplicationManager(DeduplicationManager):
                 }
                 chunks.append(chunk_data)
 
-            logger.debug(f"Found {len(chunks)} existing chunks for {source_url}")
+            logger.debug("Found %d existing chunks for %s", len(chunks), source_url)
             return chunks
 
         except Exception as e:
-            logger.warning(f"Error finding existing chunks for {source_url}: {e}")
+            logger.warning("Error finding existing chunks for %s: %s", source_url, e)
             return []
 
     async def identify_orphaned_chunks(self, source_url: str) -> list[str]:
@@ -628,7 +681,9 @@ class VectorDeduplicationManager(DeduplicationManager):
             return orphaned_ids
 
         except Exception as e:
-            logger.warning(f"Error identifying orphaned chunks for {source_url}: {e}")
+            logger.warning(
+                "Error identifying orphaned chunks for %s: %s", source_url, e
+            )
             return []
 
     async def cleanup_orphaned_chunks(self, chunk_ids: list[str]) -> int:
@@ -650,9 +705,9 @@ class VectorDeduplicationManager(DeduplicationManager):
                 chunk_ids
             )
 
-            logger.info(f"Successfully deleted {deleted_count} orphaned chunks")
+            logger.info("Successfully deleted %d orphaned chunks", deleted_count)
             return int(deleted_count)
 
         except Exception as e:
-            logger.error(f"Error cleaning up orphaned chunks: {e}")
+            logger.error("Error cleaning up orphaned chunks: %s", e)
             return 0

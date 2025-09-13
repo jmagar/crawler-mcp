@@ -354,18 +354,22 @@ class CollectionValidator(BaseValidator):
 
         # Uniqueness check
         if self.unique_items:
-            unique_items = (
-                set(value)
-                if all(
-                    isinstance(item, str | int | float | bool | type(None))
-                    for item in value
-                )
-                else []
-            )
-            if len(unique_items) != len(value):
-                return ValidationResult.failure(
-                    f"{field_name} must contain unique items"
-                )
+            if all(
+                isinstance(item, str | int | float | bool | type(None))
+                for item in value
+            ):
+                if len(set(value)) != len(value):
+                    return ValidationResult.failure(
+                        f"{field_name} must contain unique items"
+                    )
+            else:
+                seen: list[object] = []
+                for item in value:
+                    if any(item is s or item == s for s in seen):
+                        return ValidationResult.failure(
+                            f"{field_name} must contain unique items"
+                        )
+                    seen.append(item)
 
         # Validate individual items
         if self.item_validator:

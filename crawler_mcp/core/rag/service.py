@@ -18,11 +18,13 @@ from typing import Any
 
 from ...models.crawl import CrawlResult
 from ...models.rag import DocumentChunk, RagQuery, RagResult, SearchMatch
-from ...settings import settings
+from ...settings import get_settings
+
+settings = get_settings()
 from ..embeddings import EmbeddingService
 from ..exceptions import ServiceError
-from ..utils import normalize_url
 from ..vectors import VectorService
+from .deduplication import VectorDeduplicationManager
 from .processing import ProcessingPipeline
 
 logger = logging.getLogger(__name__)
@@ -262,7 +264,7 @@ class RagService:
             logger.warning("tiktoken not available, using character-based chunking")
             self.tokenizer_type = "character"
 
-        # Initialize Qwen3 reranker with GPU optimization
+        # Initialize CrossEncoder reranker with GPU optimization
         self.reranker = None
         self.reranker_type = "none"
 
@@ -279,9 +281,9 @@ class RagService:
                     # Force GPU usage for reranker if available
                     device = "cuda:0" if torch.cuda.is_available() else "cpu"
                     self.reranker = CrossEncoder(settings.reranker_model, device=device)
-                    self.reranker_type = "qwen3"
+                    self.reranker_type = "cross_encoder"
                     logger.info(
-                        "Using Qwen3 reranker: %s on device: %s",
+                        "Using CrossEncoder reranker: %s on device: %s",
                         settings.reranker_model,
                         device,
                     )
@@ -410,17 +412,9 @@ class RagService:
         Returns:
             Deterministic UUID string
         """
-        import uuid
-
-        normalized_url = normalize_url(url)
-        id_string = f"{normalized_url}:{chunk_index}"
-        # Generate a deterministic UUID from the hash
-        hash_bytes = hashlib.blake2b(
-            id_string.encode(), digest_size=16
-        ).digest()  # BLAKE2b with 16 bytes for UUID compatibility
-        # Create UUID from the 16 bytes of the hash
-        deterministic_uuid = uuid.UUID(bytes=hash_bytes)
-        return str(deterministic_uuid)
+        # Use standardized deduplication service
+        deduplicator = VectorDeduplicationManager(vector_service=None)
+        return deduplicator.generate_deterministic_id(url, chunk_index)
 
     def _calculate_content_hash(self, content: str) -> str:
         """

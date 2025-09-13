@@ -130,9 +130,9 @@ MINIMAL_VIEWPORT_WIDTH: Final[int] = 800
 MINIMAL_VIEWPORT_HEIGHT: Final[int] = 600
 
 # Browser timeouts (milliseconds)
-DEFAULT_PAGE_TIMEOUT: Final[int] = 30000
-AGGRESSIVE_PAGE_TIMEOUT: Final[int] = 15000
-CONSERVATIVE_PAGE_TIMEOUT: Final[int] = 60000
+DEFAULT_PAGE_TIMEOUT_MS: Final[int] = 30_000
+AGGRESSIVE_PAGE_TIMEOUT_MS: Final[int] = 15_000
+CONSERVATIVE_PAGE_TIMEOUT_MS: Final[int] = 60_000
 
 # =============================================================================
 # FILE & DIRECTORY CONSTANTS
@@ -351,8 +351,7 @@ BINARY_EXTENSIONS: Final[frozenset[str]] = frozenset(
         ".wav",
         ".mkv",
         ".webm",
-        # Documents
-        ".pdf",
+        # Documents (PDFs are supported and processed by default)
         ".doc",
         ".docx",
         ".xls",
@@ -385,11 +384,10 @@ DEFAULT_EXCLUDED_URL_PATTERNS: Final[tuple[str, ...]] = (
     r".*/dashboard.*",
     r".*/account.*",
     r".*/profile.*",
-    # Binary file extensions
+    # Binary file extensions (PDFs are supported and processed by default)
     r".*\.zip$",
     r".*\.exe$",
     r".*\.bin$",
-    r".*\.pdf$",
     r".*\.jpg$",
     r".*\.jpeg$",
     r".*\.png$",

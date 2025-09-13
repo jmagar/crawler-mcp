@@ -27,7 +27,7 @@ from crawler_mcp.constants import (
     # Crawling
     DEFAULT_MAX_CRAWL_PAGES,
     DEFAULT_MIN_WORD_COUNT,
-    DEFAULT_PAGE_TIMEOUT,
+    DEFAULT_PAGE_TIMEOUT_MS,
     DEFAULT_PORT,
     DEFAULT_PRUNING_THRESHOLD,
     DEFAULT_REQUEST_TIMEOUT,
@@ -82,7 +82,7 @@ class CrawlerSettings(BaseSettings):
 
     # Qdrant Settings (9 settings)
     qdrant_url: str = "http://localhost:7000"
-    qdrant_api_key: str | None = None
+    qdrant_api_key: SecretStr | None = None
     qdrant_collection: str = "crawled_pages"
     qdrant_timeout: int = Field(default=QDRANT_DEFAULT_TIMEOUT, ge=1)
     qdrant_search_exact: bool = False
@@ -142,8 +142,9 @@ class CrawlerSettings(BaseSettings):
     max_depth: int = Field(default=3, ge=1, le=10)
     max_pages: int = Field(default=DEFAULT_MAX_CRAWL_PAGES, ge=1, alias="MAX_PAGES")
     page_timeout: int = Field(
-        default=DEFAULT_PAGE_TIMEOUT, ge=1000
-    )  # Keep in milliseconds
+        default=DEFAULT_PAGE_TIMEOUT_MS,
+        ge=1000,  # Page timeout in milliseconds
+    )
     concurrent_requests: int = Field(default=3, ge=1, le=50)
     max_retries: int = Field(default=DEFAULT_RETRY_COUNT, ge=0)
     retry_delay: float = Field(default=RETRY_INITIAL_DELAY, ge=0.1)
@@ -262,6 +263,12 @@ class CrawlerSettings(BaseSettings):
     log_format: str = Field(default="console", description="console|json")
     debug: bool = False
     log_file: str | None = None
+    log_rotation_size_mb: int = Field(
+        default=5, ge=1, le=100, description="Log file rotation size in MB"
+    )
+    log_rotation_backups: int = Field(
+        default=1, ge=0, le=10, description="Number of backup log files to keep"
+    )
     uvicorn_log_level: str = "info"
 
     # Server Resource Settings (1 setting)
@@ -278,8 +285,9 @@ class CrawlerSettings(BaseSettings):
     browser_height: int = Field(default=DEFAULT_VIEWPORT_HEIGHT, ge=600)
     browser_user_agent: str | None = None
     browser_timeout: int = Field(
-        default=DEFAULT_PAGE_TIMEOUT, ge=1000
-    )  # Keep in milliseconds
+        default=DEFAULT_PAGE_TIMEOUT_MS,
+        ge=1000,  # Browser timeout in milliseconds
+    )
     browser_wait_for: float = Field(default=0.5, ge=0.0)
     browser_sleep_on_close: float = Field(default=0.5, ge=0.0)
     browser_js_enabled: bool = True
@@ -355,7 +363,7 @@ class CrawlerSettings(BaseSettings):
         field_strs = []
         for field_name, field_value in self.__dict__.items():
             if (
-                field_name in ("proxy_username", "proxy_password")
+                field_name in {"proxy_username", "proxy_password", "qdrant_api_key"}
                 and field_value is not None
             ):
                 field_strs.append(f"{field_name}='***'")

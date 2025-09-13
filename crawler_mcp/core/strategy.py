@@ -6,10 +6,8 @@ deep crawling APIs to discover and crawl multiple pages efficiently.
 """
 
 import asyncio
-import hashlib
 import logging
 import time
-import uuid
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 from urllib.parse import urlparse
@@ -42,13 +40,13 @@ from crawler_mcp.clients.tei_client import TEIEmbeddingsClient
 
 # from crawler_mcp.core.vectors.collections import CollectionManager
 from crawler_mcp.core.batch_utils import pack_texts_into_batches
+from crawler_mcp.core.rag.deduplication import generate_point_id
 from crawler_mcp.factories.browser_factory import BrowserFactory
 from crawler_mcp.factories.content_extractor import ContentExtractorFactory
 from crawler_mcp.models.crawl import PageContent
 from crawler_mcp.models.responses import OptimizedCrawlResponse
 from crawler_mcp.processing.result_converter import ResultConverter
 from crawler_mcp.settings import CrawlerSettings, get_settings
-from crawler_mcp.utils.monitoring import PerformanceMonitor
 
 # Prefer official Crawl4AI filters/scorers when available
 try:  # DomainFilter may not exist in older versions
@@ -65,6 +63,8 @@ try:
 except Exception:
     _C4KeywordRelevanceScorer = None
 
+logger = logging.getLogger(__name__)
+
 
 class ExclusionFilter:
     """Filter to exclude URLs matching specific patterns."""
@@ -78,7 +78,15 @@ class ExclusionFilter:
         """
         import re
 
-        self.patterns = [re.compile(p) for p in patterns if p]
+        compiled_patterns = []
+        for pattern in patterns:
+            if not pattern:
+                continue
+            try:
+                compiled_patterns.append(re.compile(pattern))
+            except re.error as e:
+                logger.warning("Invalid regex pattern '%s': %s", pattern, e)
+        self.patterns = compiled_patterns
 
     def should_include(self, url: str) -> bool:
         """
@@ -176,7 +184,6 @@ class CrawlOrchestrator:
         self.browser_factory = BrowserFactory(settings, overrides)
         self.content_extractor = ContentExtractorFactory(settings, overrides)
         self.result_converter = ResultConverter(settings, overrides)
-        self.monitor = PerformanceMonitor()
 
         # State management
         self._last_pages: list[PageContent] = []
@@ -729,7 +736,10 @@ class CrawlOrchestrator:
             async with QdrantClient(
                 base_url=self.get_config_value("qdrant_url", self.settings.qdrant_url),
                 api_key=self.get_config_value(
-                    "qdrant_api_key", self.settings.qdrant_api_key
+                    "qdrant_api_key",
+                    self.settings.qdrant_api_key.get_secret_value()
+                    if self.settings.qdrant_api_key
+                    else None,
                 ),
                 timeout_s=15.0,
             ) as qdrant_client:
@@ -748,13 +758,9 @@ class CrawlOrchestrator:
                 points = []
                 for page in pages:
                     if page.embedding:
-                        # Use BLAKE2b hash converted to UUID for deterministic IDs (digest_size=16 for UUID compatibility)
-                        blake2_hash = hashlib.blake2b(
-                            page.url.encode("utf-8"), digest_size=16
-                        ).digest()
-                        # Convert BLAKE2b bytes directly to UUID (digest_size=16 produces exactly 16 bytes)
-                        url_uuid = str(uuid.UUID(bytes=blake2_hash))
-                        point: dict[str, Any] = {"id": url_uuid}
+                        # Use standardized 64-bit integer ID generation for full pages (chunk_index=0)
+                        int_id = generate_point_id(page.url, 0)
+                        point: dict[str, Any] = {"id": int_id}
                         if self.get_config_value("qdrant_vectors_name"):
                             point["vectors"] = {
                                 self.get_config_value(

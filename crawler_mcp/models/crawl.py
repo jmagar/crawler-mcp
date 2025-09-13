@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
 
+logger = logging.getLogger(__name__)
+
 
 def get_embedding_dim() -> int:
     """Get embedding dimension from configuration at runtime."""
@@ -112,22 +114,20 @@ class PageContent(BaseModel):
             if len(v) == 0:
                 raise ValueError("Embedding cannot be empty")
 
-            # Hardened dimension bounds validation
-            if len(v) > 4096:
+            # Get expected dimension from configuration
+            expected_dim = get_embedding_dim()
+
+            # Validate against configured dimension
+            if len(v) != expected_dim:
                 raise ValueError(
-                    f"Embedding dimension {len(v)} exceeds maximum allowed (4096). "
-                    "This may indicate corrupted data or memory exhaustion attack."
-                )
-            if len(v) < 32:
-                raise ValueError(
-                    f"Embedding dimension {len(v)} is suspiciously small (minimum 32). "
-                    "Check if embedding model is configured correctly."
+                    f"Embedding dimension mismatch: expected {expected_dim}, got {len(v)}. "
+                    f"Check if embedding model is configured correctly."
                 )
 
             # Check for finite values and valid float types with value bounds
             extreme_values = []
             for i, val in enumerate(v):
-                if not isinstance(val, int | float):
+                if not isinstance(val, (int, float)):
                     raise ValueError(
                         f"Embedding value at index {i} must be numeric, got {type(val)}: {val}"
                     )
@@ -149,12 +149,13 @@ class PageContent(BaseModel):
             # Detect suspicious patterns
             v_set = set(v)
             if len(v_set) == 1:
-                raise ValueError(
+                logger.debug(
                     f"Embedding has all identical values ({next(iter(v_set))}). "
+                    f"Vector length: {len(v)}. "
                     "This indicates degenerate or corrupted embedding."
                 )
             if len(v_set) < len(v) * 0.1:  # Less than 10% unique values
-                raise ValueError(
+                logger.debug(
                     f"Embedding has suspiciously few unique values ({len(v_set)}/{len(v)}). "
                     "This may indicate corrupted or quantized embedding."
                 )
@@ -204,7 +205,7 @@ class CrawlRequest(BaseModel):
 
     model_config = ConfigDict()
 
-    url: str | list[str]
+    url: list[str]
     max_pages: int | None = Field(default=100, ge=1, le=1000)
     max_depth: int | None = Field(default=3, ge=1, le=10)
     include_patterns: list[str] | None = None

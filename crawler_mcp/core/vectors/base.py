@@ -51,6 +51,13 @@ class BaseVectorService:
     and common functionality.
     """
 
+    client: AsyncQdrantClient | None
+    _owned_client: bool
+    collection_name: str
+    vector_size: int
+    distance: Distance
+    pool: Any
+
     def __init__(self, client: AsyncQdrantClient | None = None) -> None:
         """
         Initialize the base vector service.

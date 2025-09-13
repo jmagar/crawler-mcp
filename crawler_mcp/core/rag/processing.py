@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from crawler_mcp.settings import get_settings
@@ -301,7 +301,7 @@ class WorkflowManager:
         return {
             "pipeline_health": pipeline_health,
             "progress_status": progress_status,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
 
@@ -532,7 +532,7 @@ class ProcessingPipeline:
                             )
 
                     # Create document chunk
-                    now = datetime.utcnow()
+                    now = datetime.now(UTC)
                     # Determine discovery method based on URL relationship to seed
                     discovery_method = "manual"  # Default fallback
                     if seed_url:
@@ -864,7 +864,7 @@ class ProcessingPipeline:
         health_status = {
             "pipeline_initialized": self._initialized,
             "chunker_type": type(self.chunker).__name__,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         # Check embedding pipeline health

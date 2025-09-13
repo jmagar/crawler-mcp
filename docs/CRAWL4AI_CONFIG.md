@@ -31,7 +31,7 @@ browser_config = BrowserConfig(
 # Advanced browser setup with proxy and persistence
 browser_config = BrowserConfig(
     headless=False,
-    proxy="http://user:pass@proxy:8080",
+    proxy="http://username:password@proxy.example.com:8080",  # Use environment variables in production
     use_persistent_context=True,
     user_data_dir="./browser_data",
     cookies=[
@@ -397,23 +397,24 @@ stealth_config = CrawlerRunConfig(
 #### Proxy Configuration with ProxyConfig
 
 ```python
+import os
 from crawl4ai import CrawlerRunConfig, ProxyConfig, ProxyRotationStrategy
 
 # Single proxy configuration
 proxy_config = ProxyConfig(
     server="http://proxy.example.com:8080",
     username="proxy_user",
-    password="proxy_pass"
+    password=os.getenv("PROXY_PASSWORD")  # Use environment variables
 )
 
 # From proxy string format
-proxy_config = ProxyConfig.from_string("192.168.1.100:8080:username:password")
+proxy_config = ProxyConfig.from_string(os.getenv("PROXY_CONFIG"))  # Format: "host:port:username:password"
 
 # Multiple proxies with rotation
 proxies = [
-    ProxyConfig(server="http://proxy1.com:8080", username="user1", password="pass1"),
-    ProxyConfig(server="http://proxy2.com:8080", username="user2", password="pass2"),
-    ProxyConfig(server="http://proxy3.com:8080", username="user3", password="pass3")
+    ProxyConfig(server="http://proxy1.example.com:8080", username=os.getenv("PROXY1_USER"), password=os.getenv("PROXY1_PASS")),
+    ProxyConfig(server="http://proxy2.example.com:8080", username=os.getenv("PROXY2_USER"), password=os.getenv("PROXY2_PASS")),
+    ProxyConfig(server="http://proxy3.example.com:8080", username=os.getenv("PROXY3_USER"), password=os.getenv("PROXY3_PASS"))
 ]
 
 rotation_strategy = ProxyRotationStrategy(
@@ -508,7 +509,7 @@ async def multi_step_crawling():
         # Step 1: Login page
         login_config = CrawlerRunConfig(
             session_id="user_session",  # Create persistent session
-            js_code="document.querySelector('#username').value = 'user'; document.querySelector('#password').value = 'pass'; document.querySelector('#login').click();",
+            js_code="document.querySelector('#username').value = process.env.LOGIN_USER; document.querySelector('#password').value = process.env.LOGIN_PASS; document.querySelector('#login').click();",
             wait_for="css:.dashboard",
             cache_mode=CacheMode.BYPASS
         )
@@ -617,6 +618,8 @@ from crawl4ai import (
     GeolocationConfig
 )
 
+import os
+
 # Specialized strategies (still from crawl4ai)
 from crawl4ai import (
     JsonCssExtractionStrategy,
@@ -632,7 +635,7 @@ async def example_crawl():
 
     run_config = CrawlerRunConfig(
         user_agent_mode="random",
-        proxy_config=ProxyConfig.from_string("192.168.1.1:8080:user:pass"),
+        proxy_config=ProxyConfig.from_string(os.getenv("PROXY_CONFIG")),  # Format: "host:port:username:password"
         css_selector="main.content",
         target_elements=[".article", ".post"],
         wait_for="js:() => document.querySelector('.loaded')",

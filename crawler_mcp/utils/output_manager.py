@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
 import time
 from pathlib import Path
@@ -14,6 +15,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 import portalocker
+
+# Module-level logger
+logger = logging.getLogger(__name__)
 
 
 class OutputManager:
@@ -209,9 +213,7 @@ class OutputManager:
                 json.dump(report, f, ensure_ascii=False, indent=2)
 
         except Exception as e:
-            logging.getLogger(__name__).warning(
-                "Failed to save outputs for %s: %s", domain, e
-            )
+            logger.warning("Failed to save outputs for %s: %s", domain, e)
 
     def create_latest_symlink(self, domain: str, session_id: str) -> None:
         """Create a 'latest' symlink pointing to the most recent session directory.
@@ -236,9 +238,7 @@ class OutputManager:
             latest_link.symlink_to(session_target, target_is_directory=True)
 
         except Exception as e:
-            logging.getLogger(__name__).warning(
-                "Failed to create latest symlink for %s: %s", domain, e
-            )
+            logger.warning("Failed to create latest symlink for %s: %s", domain, e)
 
     def update_index(
         self, domain: str, metadata: dict[str, Any], session_id: str | None = None
@@ -297,21 +297,15 @@ class OutputManager:
                 # Update total size
                 index["total_size_bytes"] = self.get_total_size()
 
-                # Atomic write using temporary file
-                temp_index = self.crawls_index.with_suffix(".tmp")
-                try:
-                    with open(temp_index, "w", encoding="utf-8") as temp_f:
-                        json.dump(index, temp_f, ensure_ascii=False, indent=2)
-                    temp_index.replace(self.crawls_index)
-                finally:
-                    # Clean up temp file if it exists
-                    if temp_index.exists():
-                        temp_index.unlink()
+                # Update index in-place while holding the lock
+                f.seek(0)
+                f.truncate()
+                json.dump(index, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
 
         except Exception as e:
-            logging.getLogger(__name__).warning(
-                "Failed to update index for %s: %s", domain, e
-            )
+            logger.warning("Failed to update index for %s: %s", domain, e)
 
     def _get_domain_size(self, domain: str) -> int:
         """Get total size of domain directory in bytes."""
@@ -359,7 +353,7 @@ class OutputManager:
 
     def cleanup_old_outputs(self) -> None:
         """Remove old outputs if size limit exceeded."""
-        total_size = self.get_total_size()
+        current_total = self.get_total_size()
 
         # Use max_size_bytes if provided, otherwise fall back to config
         if self.max_size_bytes is not None:
@@ -369,12 +363,12 @@ class OutputManager:
                 getattr(self.config, "max_output_size_gb", 1.0) * 1024 * 1024 * 1024
             )
 
-        if total_size <= max_size:
+        if current_total <= max_size:
             return
 
-        logging.getLogger(__name__).warning(
+        logger.warning(
             "Output size %.1fMB exceeds limit, cleaning up...",
-            total_size / (1024 * 1024),
+            current_total / (1024 * 1024),
         )
 
         try:
@@ -403,7 +397,18 @@ class OutputManager:
                 for _, domain, session_id in sessions_by_age:
                     session_dir = self.crawls_dir / domain / session_id
                     if session_dir.exists():
+                        # Calculate size before deletion
+                        dir_size = 0
+                        for file_path in session_dir.rglob("*"):
+                            if file_path.is_file():
+                                try:
+                                    dir_size += file_path.stat().st_size
+                                except OSError:
+                                    continue
+
                         shutil.rmtree(session_dir)
+                        current_total -= dir_size
+
                         # Remove from index
                         if (
                             domain in index["domains"]
@@ -412,11 +417,11 @@ class OutputManager:
                             index["domains"][domain]["sessions"].pop(session_id, None)
 
                         # Check if we're under the limit now
-                        if self.get_total_size() <= max_size:
+                        if current_total <= max_size:
                             break
 
                 # If still over limit, remove entire domain directories (oldest first)
-                if self.get_total_size() > max_size:
+                if current_total > max_size:
                     domains_by_latest_age = []
                     for domain, data in index.get("domains", {}).items():
                         if "latest" in data:
@@ -428,30 +433,36 @@ class OutputManager:
                     for _, domain in domains_by_latest_age:
                         domain_dir = self.crawls_dir / domain
                         if domain_dir.exists():
+                            # Calculate size before deletion
+                            dir_size = 0
+                            for file_path in domain_dir.rglob("*"):
+                                if file_path.is_file():
+                                    try:
+                                        dir_size += file_path.stat().st_size
+                                    except OSError:
+                                        continue
+
                             shutil.rmtree(domain_dir)
+                            current_total -= dir_size
                             index["domains"].pop(domain, None)
 
-                        # Check if we're under the limit now
-                        if self.get_total_size() <= max_size:
-                            break
+                            # Check if we're under the limit now
+                            if current_total <= max_size:
+                                break
 
                 # Update index
-                index["total_size_bytes"] = self.get_total_size()
+                index["total_size_bytes"] = current_total
                 index["last_cleanup"] = time.time()
 
-                # Atomic write using temporary file
-                temp_index = self.crawls_index.with_suffix(".tmp")
-                try:
-                    with open(temp_index, "w", encoding="utf-8") as temp_f:
-                        json.dump(index, temp_f, ensure_ascii=False, indent=2)
-                    temp_index.replace(self.crawls_index)
-                finally:
-                    # Clean up temp file if it exists
-                    if temp_index.exists():
-                        temp_index.unlink()
+                # Update index in-place while holding the lock
+                f.seek(0)
+                f.truncate()
+                json.dump(index, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
 
         except Exception as e:
-            logging.getLogger(__name__).warning("Cleanup failed: %s", e)
+            logger.warning("Cleanup failed: %s", e)
 
     def clean_cache(self, max_age_hours: int = 24) -> None:
         """Remove cache files older than max_age_hours.

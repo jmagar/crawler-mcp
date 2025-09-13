@@ -44,7 +44,11 @@ class QdrantConnectionPool:
         """
         settings = get_settings()
         self.url = url or settings.qdrant_url
-        self.api_key = api_key or settings.qdrant_api_key
+        self.api_key = api_key or (
+            settings.qdrant_api_key.get_secret_value()
+            if settings.qdrant_api_key
+            else None
+        )
         self.size = size or settings.qdrant_connection_pool_size
         self.timeout = timeout or settings.qdrant_timeout
         self.health_check_interval = health_check_interval

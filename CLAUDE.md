@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) for developing this 
 ## FastMCP Framework Knowledge
 - **Primary Transport**: Streamable-HTTP is recommended for most servers.
 - **Package Manager**: `uv` is the standard for this project. Use `pyproject.toml` to manage dependencies.
-- **Core Dependencies**: Key libraries include `fastmcp`, `crawl4ai`, `qdrant-client`, `pydantic`, `httpx`, `transformers`, and `sentence-transformers`. Optional: `tiktoken` (fallback tokenizer).
+- **Core Dependencies**: Key libraries include `fastmcp`, `crawl4ai`, `cssselect`, `qdrant-client`, `pydantic`, `httpx`, `transformers`, and `sentence-transformers`. Optional: `tiktoken` (fallback tokenizer).
 
 ## Development Guidelines
 
@@ -54,11 +54,13 @@ crawler_mcp/
 Use the built-in `fastmcp` command-line interface for an efficient development cycle.
 
 #### Interactive Debugging (`fastmcp dev`)
+
 For interactive testing and debugging, use the `dev` command. This runs your server with the MCP Inspector UI, which allows you to call tools and inspect responses.
 
 - **Start the dev server**: `fastmcp dev crawler_mcp/server.py --with crawl4ai --with qdrant-client --with torch`
 
 #### Running the Server (`fastmcp run`)
+
 To run the server directly (e.g., for integration testing or production), use the `run` command.
 
 - **Run with HTTP transport**: `fastmcp run crawler_mcp/server.py --transport http`

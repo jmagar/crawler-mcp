@@ -214,21 +214,28 @@ class EmbeddingWorker:
             )
 
             # Ensure all None values are replaced with valid embeddings
+            # Derive runtime dimension from any present embedding; fallback to settings
+            runtime_dim = next(
+                (len(e) for e in cached_embeddings if e is not None), None
+            )
+            if runtime_dim is None:
+                runtime_dim = max(0, int(settings.embedding_dimension))
+
             final_embeddings = []
             for emb in cached_embeddings:
                 if emb is not None:
                     final_embeddings.append(emb)
                 else:
-                    # This shouldn't happen if logic is correct, but provide fallback
-                    dimension = max(0, int(settings.embedding_dimension))
-                    final_embeddings.append([0.0] * dimension)
+                    # Fallback (rare): provide zero vector of runtime_dim
+                    final_embeddings.append([0.0] * runtime_dim)
             return final_embeddings
 
         except Exception as e:
             self.error_count += 1
             logger.error(f"Worker {self.worker_id} failed to process batch: {e}")
-            # Return empty embeddings for failed texts
-            return [[] for _ in texts]
+            # Return zero-vectors for failed texts to preserve dimensions
+            dimension = max(0, int(settings.embedding_dimension))
+            return [[0.0] * dimension for _ in texts]
 
     async def shutdown(self) -> None:
         """Shutdown the worker and clean up resources."""
@@ -405,7 +412,7 @@ class EmbeddingPipeline:
     async def process_chunks_parallel(
         self,
         chunks: list[DocumentChunk],
-        progress_callback: Callable[[int, int], None] | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
         base_progress: int = 0,
     ) -> list[DocumentChunk]:
         """
@@ -533,8 +540,10 @@ class EmbeddingPipeline:
             for i in range(0, len(document_chunks), embedding_batch_size)
         ]
 
-        # Create exactly one storage worker per chunk batch to ensure all items are processed
-        num_storage_workers = len(chunk_batches)
+        # Bound number of storage workers to the parallelism cap
+        num_storage_workers = min(
+            8, len(chunk_batches)
+        )  # equals max_concurrent_storage_ops
 
         logger.info(
             f"Starting parallel pipeline: {len(chunk_batches)} embedding batches, "
@@ -607,6 +616,7 @@ class EmbeddingPipeline:
                         progress_callback(
                             progress,
                             base_progress + 10,
+                            f"Stored batch {batch_id} ({len(valid_chunks)} chunks)",
                         )
 
                     logger.debug(

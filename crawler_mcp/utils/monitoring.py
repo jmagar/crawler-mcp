@@ -9,7 +9,7 @@ import asyncio
 import logging
 import time
 from collections import defaultdict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -62,7 +62,7 @@ class CrawlMetrics:
 class PerformanceMonitor:
     """Monitor crawler performance and provide customizable hooks"""
 
-    def __init__(self, config: object | None = None):
+    def __init__(self, config: Mapping[str, Any] | None = None):
         """
         Initialize performance monitor.
 
@@ -74,17 +74,17 @@ class PerformanceMonitor:
 
         # Metrics tracking
         self.metrics = CrawlMetrics()
-        self.hooks: defaultdict[str, list[Callable]] = defaultdict(list)
+        self.hooks: defaultdict[str, list[Callable[..., Any]]] = defaultdict(list)
 
         # Performance tracking
-        self._performance_samples: deque = deque(maxlen=100)  # Last 100 samples
-        self._system_metrics: deque = deque(maxlen=50)  # System metrics
+        self._performance_samples: deque[dict[str, Any]] = deque(maxlen=100)
+        self._system_metrics: deque[dict[str, Any]] = deque(maxlen=50)
         self._proc = None  # psutil.Process primed at start
 
         # State tracking
         self._crawl_active = False
         self._monitoring_task: asyncio.Task | None = None
-        self._hook_queue: asyncio.Queue | None = None
+        self._hook_queue: asyncio.Queue[tuple[str | None, dict[str, Any]]] | None = None
         self._hook_worker_task: asyncio.Task | None = None
         # Error/invalid samples
         self._error_samples: dict[str, list[str]] = {}
@@ -187,8 +187,8 @@ class PerformanceMonitor:
                     await hook_func(**kwargs)
                 else:
                     hook_func(**kwargs)
-            except Exception as e:
-                self.logger.error(f"Hook {hook_type} failed: {e}")
+            except Exception:
+                self.logger.exception("Hook %s failed", hook_type)
 
     def start_crawl_monitoring(self, urls: list[str]) -> None:
         """
@@ -219,7 +219,7 @@ class PerformanceMonitor:
         # Start system monitoring task (always on; lightweight 1s sampling)
         self._monitoring_task = asyncio.create_task(self._system_monitoring_loop())
 
-        self.logger.info(f"Started crawl monitoring for {len(urls)} URLs")
+        self.logger.info("Started crawl monitoring for %d URLs", len(urls))
         self._enqueue_hook("crawl_started", urls=urls, metrics=self.metrics)
 
     def record_page_success(
@@ -339,7 +339,7 @@ class PerformanceMonitor:
         """
         self.metrics.hash_placeholders_detected += 1
 
-        self.logger.warning(f"Hash placeholder detected: {url}")
+        self.logger.warning("Hash placeholder detected: %s", url)
         self._enqueue_hook("hash_placeholder_detected", url=url, metrics=self.metrics)
 
     def record_content_validation(
@@ -430,9 +430,10 @@ class PerformanceMonitor:
             self._monitoring_task = None
 
         self.logger.info(
-            f"Crawl monitoring completed: {self.metrics.pages_crawled} pages, "
-            f"{self.metrics.pages_per_second:.2f} pages/sec, "
-            f"{self.metrics.pages_failed} failures"
+            "Crawl monitoring completed: %d pages, %.2f pages/sec, %d failures",
+            self.metrics.pages_crawled,
+            self.metrics.pages_per_second,
+            self.metrics.pages_failed,
         )
 
         self._enqueue_hook("crawl_completed", metrics=self.metrics)
@@ -450,8 +451,8 @@ class PerformanceMonitor:
                 await asyncio.sleep(1.0)  # Sample every second
         except asyncio.CancelledError:
             pass
-        except Exception as e:
-            self.logger.error(f"System monitoring failed: {e}")
+        except Exception:
+            self.logger.exception("System monitoring failed")
 
     async def _collect_system_metrics(self) -> None:
         """Collect current process and system metrics"""
@@ -766,9 +767,7 @@ class PerformanceMonitor:
             # Fallback to direct call if queue not started
             try:
                 loop = asyncio.get_running_loop()
-                task = loop.create_task(self.trigger_hook(hook_type, **kwargs))
-                # Task reference stored to prevent premature garbage collection
-                _ = task  # Explicitly mark as used
+                loop.create_task(self.trigger_hook(hook_type, **kwargs))
             except RuntimeError:
                 # No event loop running, schedule for later
                 pass
@@ -779,9 +778,7 @@ class PerformanceMonitor:
             # In case of full queue or other errors, fallback to direct execution
             try:
                 loop = asyncio.get_running_loop()
-                task = loop.create_task(self.trigger_hook(hook_type, **kwargs))
-                # Task reference stored to prevent premature garbage collection
-                _ = task  # Explicitly mark as used
+                loop.create_task(self.trigger_hook(hook_type, **kwargs))
             except RuntimeError:
                 # No event loop running, skip hook execution
                 pass
