@@ -10,8 +10,11 @@ from dateutil import parser as date_parser
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import Distance
 
-from ...config import settings
+from crawler_mcp.settings import get_settings
+
 from ..connection_pool import get_pool
+
+settings = get_settings()
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +50,13 @@ class BaseVectorService:
     Base class for vector service modules providing shared client management
     and common functionality.
     """
+
+    client: AsyncQdrantClient | None
+    _owned_client: bool
+    collection_name: str
+    vector_size: int
+    distance: Distance
+    pool: Any
 
     def __init__(self, client: AsyncQdrantClient | None = None) -> None:
         """

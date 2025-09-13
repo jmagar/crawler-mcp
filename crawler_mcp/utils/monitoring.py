@@ -9,13 +9,11 @@ import asyncio
 import logging
 import time
 from collections import defaultdict, deque
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 import psutil
-
-from crawler_mcp.optimized_config import OptimizedConfig
 
 
 @dataclass
@@ -64,29 +62,29 @@ class CrawlMetrics:
 class PerformanceMonitor:
     """Monitor crawler performance and provide customizable hooks"""
 
-    def __init__(self, config: OptimizedConfig = None):
+    def __init__(self, config: Mapping[str, Any] | None = None):
         """
         Initialize performance monitor.
 
         Args:
             config: Optional optimized crawler configuration
         """
-        self.config = config or OptimizedConfig()
+        self.config = config
         self.logger = logging.getLogger(__name__)
 
         # Metrics tracking
         self.metrics = CrawlMetrics()
-        self.hooks: defaultdict[str, list[Callable]] = defaultdict(list)
+        self.hooks: defaultdict[str, list[Callable[..., Any]]] = defaultdict(list)
 
         # Performance tracking
-        self._performance_samples: deque = deque(maxlen=100)  # Last 100 samples
-        self._system_metrics: deque = deque(maxlen=50)  # System metrics
+        self._performance_samples: deque[dict[str, Any]] = deque(maxlen=100)
+        self._system_metrics: deque[dict[str, Any]] = deque(maxlen=50)
         self._proc = None  # psutil.Process primed at start
 
         # State tracking
         self._crawl_active = False
         self._monitoring_task: asyncio.Task | None = None
-        self._hook_queue: asyncio.Queue | None = None
+        self._hook_queue: asyncio.Queue[tuple[str | None, dict[str, Any]]] | None = None
         self._hook_worker_task: asyncio.Task | None = None
         # Error/invalid samples
         self._error_samples: dict[str, list[str]] = {}
@@ -151,7 +149,7 @@ class PerformanceMonitor:
             )
 
         self.hooks[hook_type].append(hook_func)
-        self.logger.debug(f"Registered hook for {hook_type}")
+        self.logger.debug("Registered hook for %s", hook_type)
 
     def unregister_hook(self, hook_type: str, hook_func: Callable[..., Any]) -> bool:
         """
@@ -189,8 +187,8 @@ class PerformanceMonitor:
                     await hook_func(**kwargs)
                 else:
                     hook_func(**kwargs)
-            except Exception as e:
-                self.logger.error(f"Hook {hook_type} failed: {e}")
+            except Exception:
+                self.logger.exception("Hook %s failed", hook_type)
 
     def start_crawl_monitoring(self, urls: list[str]) -> None:
         """
@@ -221,7 +219,7 @@ class PerformanceMonitor:
         # Start system monitoring task (always on; lightweight 1s sampling)
         self._monitoring_task = asyncio.create_task(self._system_monitoring_loop())
 
-        self.logger.info(f"Started crawl monitoring for {len(urls)} URLs")
+        self.logger.info("Started crawl monitoring for %d URLs", len(urls))
         self._enqueue_hook("crawl_started", urls=urls, metrics=self.metrics)
 
     def record_page_success(
@@ -316,7 +314,7 @@ class PerformanceMonitor:
         if total_attempts > 0:
             self.metrics.error_rate = self.metrics.pages_failed / total_attempts
 
-        self.logger.debug(f"Recorded failure for {url}: {error_type}")
+        self.logger.debug("Recorded failure for %s: %s", url, error_type)
         self._enqueue_hook(
             "page_failed",
             url=url,
@@ -341,7 +339,7 @@ class PerformanceMonitor:
         """
         self.metrics.hash_placeholders_detected += 1
 
-        self.logger.warning(f"Hash placeholder detected: {url}")
+        self.logger.warning("Hash placeholder detected: %s", url)
         self._enqueue_hook("hash_placeholder_detected", url=url, metrics=self.metrics)
 
     def record_content_validation(
@@ -356,13 +354,16 @@ class PerformanceMonitor:
             is_duplicate: Whether content was detected as duplicate
         """
         # Update quality metrics
-        total_validated = self.metrics.pages_crawled
+        total_validated = self.metrics.content_validations_recorded
         if total_validated > 0:
             # Running average of quality scores
             current_avg = self.metrics.content_quality_score
             self.metrics.content_quality_score = (
-                current_avg * (total_validated - 1) + quality_score
-            ) / total_validated
+                current_avg * total_validated + quality_score
+            ) / (total_validated + 1)
+        else:
+            # First validation
+            self.metrics.content_quality_score = quality_score
         # Track validations recorded
         self.metrics.content_validations_recorded += 1
 
@@ -385,7 +386,7 @@ class PerformanceMonitor:
             text = (content or "").strip()
             if not text:
                 return False
-            h = hashlib.sha256(text.encode("utf-8")).hexdigest()
+            h = hashlib.blake2b(text.encode("utf-8"), digest_size=32).hexdigest()
             info = self._content_hashes.get(h)
             if info is None:
                 self._content_hashes[h] = {
@@ -429,9 +430,10 @@ class PerformanceMonitor:
             self._monitoring_task = None
 
         self.logger.info(
-            f"Crawl monitoring completed: {self.metrics.pages_crawled} pages, "
-            f"{self.metrics.pages_per_second:.2f} pages/sec, "
-            f"{self.metrics.pages_failed} failures"
+            "Crawl monitoring completed: %d pages, %.2f pages/sec, %d failures",
+            self.metrics.pages_crawled,
+            self.metrics.pages_per_second,
+            self.metrics.pages_failed,
         )
 
         self._enqueue_hook("crawl_completed", metrics=self.metrics)
@@ -449,8 +451,8 @@ class PerformanceMonitor:
                 await asyncio.sleep(1.0)  # Sample every second
         except asyncio.CancelledError:
             pass
-        except Exception as e:
-            self.logger.error(f"System monitoring failed: {e}")
+        except Exception:
+            self.logger.exception("System monitoring failed")
 
     async def _collect_system_metrics(self) -> None:
         """Collect current process and system metrics"""
@@ -515,8 +517,8 @@ class PerformanceMonitor:
                 metrics=self.metrics,
             )
 
-        except Exception as e:
-            self.logger.debug(f"Failed to collect system metrics: {e}")
+        except Exception:
+            self.logger.debug("Failed to collect system metrics", exc_info=True)
 
     def _classify_error(self, error: str) -> str:
         """Classify error type for tracking"""
@@ -737,10 +739,15 @@ class PerformanceMonitor:
 
     # Internal: hook worker
     def _start_hook_worker(self) -> None:
-        if self._hook_queue is None:
-            self._hook_queue = asyncio.Queue()
-        if self._hook_worker_task is None or self._hook_worker_task.done():
-            self._hook_worker_task = asyncio.create_task(self._hook_worker())
+        try:
+            loop = asyncio.get_running_loop()
+            if self._hook_queue is None:
+                self._hook_queue = asyncio.Queue()
+            if self._hook_worker_task is None or self._hook_worker_task.done():
+                self._hook_worker_task = loop.create_task(self._hook_worker())
+        except RuntimeError:
+            # No event loop running, cannot start worker
+            pass
 
     def _stop_hook_worker(self) -> None:
         # Signal termination and cancel worker
@@ -758,13 +765,23 @@ class PerformanceMonitor:
             return
         if self._hook_queue is None:
             # Fallback to direct call if queue not started
-            asyncio.create_task(self.trigger_hook(hook_type, **kwargs))  # noqa: RUF006
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.trigger_hook(hook_type, **kwargs))
+            except RuntimeError:
+                # No event loop running, schedule for later
+                pass
             return
         try:
             self._hook_queue.put_nowait((hook_type, kwargs))
         except Exception:
             # In case of full queue or other errors, fallback to direct execution
-            asyncio.create_task(self.trigger_hook(hook_type, **kwargs))  # noqa: RUF006
+            try:
+                loop = asyncio.get_running_loop()
+                loop.create_task(self.trigger_hook(hook_type, **kwargs))
+            except RuntimeError:
+                # No event loop running, skip hook execution
+                pass
 
     async def _hook_worker(self) -> None:
         try:
@@ -777,8 +794,10 @@ class PerformanceMonitor:
                     break  # sentinel
                 try:
                     await self.trigger_hook(hook_type, **payload)
-                except Exception as e:
-                    self.logger.debug(f"Hook worker error for {hook_type}: {e}")
+                except Exception:
+                    self.logger.debug(
+                        "Hook worker error for %s", hook_type, exc_info=True
+                    )
                 finally:
                     self._hook_queue.task_done()
         except asyncio.CancelledError:

@@ -13,6 +13,7 @@ import os
 import signal
 import sys
 from datetime import UTC
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Any
 
@@ -25,43 +26,64 @@ from rich.console import Console
 from rich.logging import RichHandler
 from rich.traceback import install
 
-from crawler_mcp.config import settings
 from crawler_mcp.core import EmbeddingService, RagService, VectorService
 from crawler_mcp.core.logging import get_logger
-from crawler_mcp.optimized_config import OptimizedConfig
+from crawler_mcp.settings import get_settings
 
 # Tool registrations (top-level package)
 from crawler_mcp.tools.crawling import register_crawling_tools
 from crawler_mcp.tools.github_pr_tools import register_github_pr_tools
 from crawler_mcp.tools.rag import register_rag_tools
 
+settings = get_settings()
+
 
 def setup_logging() -> None:
-    """Configure rich colorized logging for the application."""
+    """Configure logging (console or json) based on settings."""
     install(show_locals=settings.debug)
 
-    console = Console(force_terminal=True, width=120)
-    rich_handler = RichHandler(
-        console=console,
-        show_path=settings.debug,
-        show_time=True,
-        rich_tracebacks=True,
-        tracebacks_show_locals=settings.debug,
-        markup=True,
-        log_time_format="[%H:%M:%S]",
-    )
+    level_name = settings.log_level.lower()
+    level = getattr(logging, level_name.upper(), logging.DEBUG)
 
-    logging.basicConfig(
-        level=getattr(logging, settings.log_level.upper()),
-        format="%(message)s",
-        datefmt="[%X]",
-        handlers=[rich_handler],
-    )
+    if settings.log_format == "json":
+        # Simple JSON-style formatter
+        formatter = logging.Formatter(
+            '{"time":"%(asctime)s","level":"%(levelname)s","message":"%(message)s"}',
+            datefmt="%Y-%m-%dT%H:%M:%S",
+        )
+        handler = logging.StreamHandler()
+        handler.setFormatter(formatter)
+        logging.basicConfig(level=level, handlers=[handler])
+    else:
+        # Rich console output
+        console = Console(force_terminal=True, width=120)
+        rich_handler = RichHandler(
+            console=console,
+            show_path=settings.debug,
+            show_time=True,
+            rich_tracebacks=True,
+            tracebacks_show_locals=settings.debug,
+            markup=True,
+            log_time_format="[%H:%M:%S]",
+        )
+        logging.basicConfig(
+            level=level, format="%(message)s", datefmt="[%X]", handlers=[rich_handler]
+        )
 
     if settings.log_to_file and settings.log_file:
         log_path = Path(settings.log_file)
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        file_handler = logging.FileHandler(log_path)
+
+        # Use configurable rotation settings if available, otherwise use defaults
+        max_bytes = getattr(settings, "log_rotation_size_mb", 5) * 1024 * 1024
+        backup_count = getattr(settings, "log_rotation_backups", 1)
+
+        file_handler = RotatingFileHandler(
+            log_path,
+            maxBytes=max_bytes,
+            backupCount=backup_count,
+        )
+        # File logs use a readable format
         file_handler.setFormatter(
             logging.Formatter(
                 "[%(asctime)s] %(levelname)s - %(message)s", datefmt="%H:%M:%S"
@@ -69,6 +91,7 @@ def setup_logging() -> None:
         )
         logging.getLogger().addHandler(file_handler)
 
+    # Quiet noisy libraries
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("urllib3").setLevel(logging.WARNING)
     logging.getLogger("selenium").setLevel(logging.WARNING)
@@ -96,22 +119,23 @@ os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 # Configure OAuth if enabled
 auth_provider = None
-if settings.oauth_enabled and settings.oauth_provider == "google":
-    try:
-        from fastmcp.server.auth.providers.google import GoogleProvider
+# Temporarily disable OAuth
+# if settings.oauth_enabled and settings.oauth_provider == "google":
+#     try:
+#         from fastmcp.server.auth.providers.google import GoogleProvider
 
-        auth_provider = GoogleProvider(
-            client_id=settings.google_client_id,
-            client_secret=settings.google_client_secret,
-            base_url=settings.google_base_url,
-            required_scopes=settings.google_scopes_list,
-        )
-        logger.info("Google OAuth enabled with base URL: %s", settings.google_base_url)
-    except Exception as e:
-        logger.error("Failed to initialize Google OAuth: %s", e)
-        raise RuntimeError(
-            "OAuth is enabled but GoogleProvider failed to initialize"
-        ) from e
+#         auth_provider = GoogleProvider(
+#             client_id=settings.google_client_id,
+#             client_secret=settings.google_client_secret,
+#             base_url=settings.google_base_url,
+#             required_scopes=settings.google_scopes_list,
+#         )
+#         logger.info("Google OAuth enabled with base URL: %s", settings.google_base_url)
+#     except Exception as e:
+#         logger.error("Failed to initialize Google OAuth: %s", e)
+#         raise RuntimeError(
+#             "OAuth is enabled but GoogleProvider failed to initialize"
+#         ) from e
 
 # FastMCP instance (pass mask_error_details=True to avoid older settings attr lookup)
 try:  # Prefer passing a truthy value so ToolManager won't access settings.mask_error_details
@@ -127,7 +151,7 @@ mcp.add_middleware(ErrorHandlingMiddleware())
 mcp.add_middleware(LoggingMiddleware())
 mcp.add_middleware(TimingMiddleware())
 
-# Register optimized tools for now
+# Register tools
 register_github_pr_tools(mcp)
 register_rag_tools(mcp)
 register_crawling_tools(mcp)
@@ -253,7 +277,7 @@ async def get_server_info(ctx: Context) -> dict[str, Any]:
                 if settings.oauth_enabled
                 else None,
             },
-            "optimized_config": OptimizedConfig.from_env().to_dict(),
+            # OptimizedConfig has been removed; settings above reflect active config
             "env_present": {
                 k: (os.environ.get(k) is not None)
                 for k in [
@@ -289,9 +313,6 @@ async def get_user_info(ctx: Context) -> dict[str, Any]:
 
         # Inform client that we're retrieving user info
         await ctx.info("Retrieving authenticated user info")
-        token = get_access_token()
-        if not token:
-            raise ToolError("No authentication token found")
 
         # Extract and validate token claims
         claims = token.claims

@@ -11,10 +11,12 @@ import threading
 from abc import ABC, abstractmethod
 from typing import Any
 
-from ...config import settings
+from crawler_mcp.settings import get_settings
+
+settings = get_settings()
 
 
-def safe_strip(content) -> str:
+def safe_strip(content: Any) -> str:
     """Safely strip content, handling lists and other types."""
     if content is None:
         return ""
@@ -43,13 +45,13 @@ def find_paragraph_boundary(search_text: str, ideal_end: int) -> int | None:
 
 def find_sentence_boundary(search_text: str, ideal_end: int) -> int | None:
     """Find sentence ending boundary."""
-    sentence_patterns = [". ", "! ", "? ", ".\n", "!\n", "?\n"]
+    sentence_patterns = [". ", "! ", "? ", ".\n", "!\n", "?\n", ".", "!", "?"]
     sentence_breaks = []
     for pattern in sentence_patterns:
         sentence_breaks.extend(
             [
                 i + len(pattern)
-                for i in range(len(search_text) - len(pattern))
+                for i in range(len(search_text) - len(pattern) + 1)
                 if search_text[i : i + len(pattern)] == pattern
             ]
         )
@@ -631,8 +633,6 @@ class SemanticChunker(ChunkingStrategy):
 
     def split_on_sentences(self, text: str) -> list[str]:
         """Split text on sentence boundaries."""
-        import re
-
         # Simple sentence splitting
         sentences = re.split(r"[.!?]+\s+", text)
         return [safe_strip(s) for s in sentences if safe_strip(s)]

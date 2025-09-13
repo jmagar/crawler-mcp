@@ -7,13 +7,13 @@ existing MCP models, enabling seamless integration with the existing system.
 
 import logging
 import time
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit, urlunsplit
 
 from crawl4ai.models import CrawlResult as Crawl4AIResult
 
-from crawler_mcp.crawl_core.parallel_engine import CrawlStats
+from crawler_mcp.constants import IMAGE_EXTENSIONS
 
 # Import our existing models
 from crawler_mcp.models.crawl import (
@@ -22,21 +22,28 @@ from crawler_mcp.models.crawl import (
     CrawlStatus,
     PageContent,
 )
-from crawler_mcp.optimized_config import OptimizedConfig
+from crawler_mcp.settings import CrawlerSettings
 
 
 class ResultConverter:
     """Converts between Crawl4AI models and our MCP models"""
 
-    def __init__(self, config: OptimizedConfig = None):
-        """
-        Initialize result converter.
+    def __init__(
+        self, settings: CrawlerSettings, overrides: dict[str, Any] | None = None
+    ):
+        """Initialize result converter.
 
         Args:
-            config: Optional optimized crawler configuration
+            settings: Global settings instance
+            overrides: Optional runtime configuration overrides
         """
-        self.config = config or OptimizedConfig()
+        self.settings = settings
+        self.overrides = overrides or {}
         self.logger = logging.getLogger(__name__)
+
+    def get_config_value(self, key: str, default: Any = None) -> Any:
+        """Get configuration value from overrides or settings."""
+        return self.overrides.get(key, getattr(self.settings, key, default))
 
     def crawl4ai_to_page_content(
         self, result: Crawl4AIResult, prefer_fit_markdown: bool = True
@@ -59,10 +66,18 @@ class ResultConverter:
             title = self._extract_title(result)
 
             # Extract and process links
-            links = self._extract_links(result) if self.config.extract_links else []
+            links = (
+                self._extract_links(result)
+                if self.get_config_value("extract_links", False)
+                else []
+            )
 
             # Extract and process images
-            images = self._extract_images(result) if self.config.extract_images else []
+            images = (
+                self._extract_images(result)
+                if self.get_config_value("extract_images", False)
+                else []
+            )
 
             # Calculate word count
             word_count = len(content.split()) if content else 0
@@ -82,12 +97,42 @@ class ResultConverter:
                 links_count=len(links),
                 images_count=len(images),
                 metadata=metadata,
-                timestamp=datetime.now(),
+                timestamp=datetime.now(UTC),
             )
 
         except Exception as e:
+            # Safely get URL, defaulting to "<unknown>" if not available
+            url_for_logging = getattr(result, "url", "<unknown>")
+
+            # Sanitize URL to remove any credentials before logging (if URL exists)
+            if url_for_logging != "<unknown>":
+                try:
+                    parsed = urlsplit(url_for_logging)
+                    # Remove userinfo (username:password@) from netloc if present
+                    if "@" in parsed.netloc:
+                        # Split on @ and keep only the host:port part
+                        sanitized_netloc = parsed.netloc.split("@", 1)[1]
+                    else:
+                        sanitized_netloc = parsed.netloc
+                    # Reconstruct URL without credentials
+                    url_for_logging = urlunsplit(
+                        (
+                            parsed.scheme,
+                            sanitized_netloc,
+                            parsed.path,
+                            parsed.query,
+                            parsed.fragment,
+                        )
+                    )
+                except Exception:
+                    # If sanitization fails, use the original URL
+                    pass
+
             self.logger.error(
-                f"Failed to convert Crawl4AI result for {result.url}: {e}"
+                "Failed to convert Crawl4AI result for %s: %s",
+                url_for_logging,
+                e,
+                exc_info=True,
             )
 
             # Return minimal PageContent on error
@@ -103,7 +148,7 @@ class ResultConverter:
                 links_count=0,
                 images_count=0,
                 metadata={"conversion_error": str(e)},
-                timestamp=datetime.now(),
+                timestamp=datetime.now(UTC),
             )
 
     def _extract_markdown_content(
@@ -124,29 +169,58 @@ class ResultConverter:
 
         try:
             markdown_obj = result.markdown
+            self.logger.debug(
+                "Markdown object type: %s, hasattr fit_markdown: %s, hasattr raw_markdown: %s",
+                type(markdown_obj),
+                hasattr(markdown_obj, "fit_markdown"),
+                hasattr(markdown_obj, "raw_markdown"),
+            )
 
             # Try fit_markdown first if preferred
             if prefer_fit_markdown and hasattr(markdown_obj, "fit_markdown"):
                 fit_content = markdown_obj.fit_markdown
+                self.logger.debug(
+                    "fit_markdown content type: %s, length: %d",
+                    type(fit_content),
+                    len(str(fit_content)) if fit_content else 0,
+                )
                 if fit_content and str(fit_content).strip():
                     return str(fit_content).strip()
 
             # Try raw_markdown as fallback
             if hasattr(markdown_obj, "raw_markdown"):
                 raw_content = markdown_obj.raw_markdown
+                self.logger.debug(
+                    "raw_markdown content type: %s, length: %d",
+                    type(raw_content),
+                    len(str(raw_content)) if raw_content else 0,
+                )
                 if raw_content and str(raw_content).strip():
                     return str(raw_content).strip()
 
             # Direct string conversion as last resort
             if isinstance(markdown_obj, str):
+                self.logger.debug(
+                    "markdown_obj is string, length: %d", len(markdown_obj)
+                )
                 return markdown_obj.strip()
 
             # Try string conversion of the object
             content = str(markdown_obj).strip()
+            # Determine if truncated
+            truncated = len(content) > 100
+            preview = content[:100]
+            suffix = "…" if truncated else ""
+            self.logger.debug(
+                "String conversion preview='%s%s' length=%d",
+                preview,
+                suffix,
+                len(content),
+            )
             return content if content != "None" else ""
 
         except Exception as e:
-            self.logger.debug(f"Failed to extract markdown from {result.url}: {e}")
+            self.logger.debug("Failed to extract markdown from %s: %s", result.url, e)
             return ""
 
     def _extract_title(self, result: Crawl4AIResult) -> str:
@@ -184,7 +258,7 @@ class ResultConverter:
                         links.extend([self._normalize_link(link) for link in internal])
 
                     # External links included when extract_links is True
-                    if self.config.extract_links:
+                    if self.get_config_value("extract_links", False):
                         external = result.links.get("external", [])
                         if isinstance(external, list):
                             links.extend(
@@ -198,7 +272,7 @@ class ResultConverter:
             return [link for link in links if self._is_valid_link(link)]
 
         except Exception as e:
-            self.logger.debug(f"Failed to extract links from {result.url}: {e}")
+            self.logger.debug("Failed to extract links from %s: %s", result.url, e)
             return []
 
     def _extract_images(self, result: Crawl4AIResult) -> list[str]:
@@ -223,7 +297,7 @@ class ResultConverter:
             return [img for img in images if self._is_valid_image_url(img)]
 
         except Exception as e:
-            self.logger.debug(f"Failed to extract images from {result.url}: {e}")
+            self.logger.debug("Failed to extract images from %s: %s", result.url, e)
             return []
 
     def _extract_metadata(self, result: Crawl4AIResult) -> dict[str, Any]:
@@ -237,7 +311,7 @@ class ResultConverter:
                     "status_code": getattr(result, "status_code", None),
                     "success": getattr(result, "success", False),
                     "extraction_method": "crawl4ai_optimized",
-                    "crawl_timestamp": datetime.now().isoformat(),
+                    "crawl_timestamp": datetime.now(UTC).isoformat(),
                 }
             )
 
@@ -267,7 +341,7 @@ class ResultConverter:
             return metadata
 
         except Exception as e:
-            self.logger.debug(f"Failed to extract metadata from {result.url}: {e}")
+            self.logger.debug("Failed to extract metadata from %s: %s", result.url, e)
             return {"metadata_error": str(e)}
 
     def _normalize_link(self, link: str | dict[str, Any]) -> str:
@@ -295,19 +369,50 @@ class ResultConverter:
             return False
 
     def _is_valid_image_url(self, img_url: str) -> bool:
-        """Validate image URL"""
-        if not img_url or not isinstance(img_url, str):
+        """Validate image URL with strict validation"""
+        if not img_url or not isinstance(img_url, str) or len(img_url.strip()) == 0:
             return False
 
-        # Check for common image extensions
-        img_extensions = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp"}
+        img_url = img_url.strip()
+
+        # Reject obviously invalid URLs
+        if len(img_url) > 2048:  # URL too long
+            return False
+
+        # Check for data URLs first (more specific validation)
+        if img_url.startswith("data:"):
+            return img_url.startswith("data:image/") and "," in img_url
+
         try:
             parsed = urlparse(img_url)
+
+            # Only allow http, https schemes
+            if parsed.scheme not in ("http", "https"):
+                return False
+
+            # Require valid netloc for http/https URLs
+            if not parsed.netloc or len(parsed.netloc) < 3:
+                return False
+
             path = parsed.path.lower()
-            return (
-                any(path.endswith(ext) for ext in img_extensions)
-                or "image" in img_url.lower()
-            )
+
+            # Check for valid image extensions (primary validation)
+            if any(path.endswith(ext) for ext in IMAGE_EXTENSIONS):
+                return True
+
+            # More restrictive query parameter validation using proper parsing
+            from urllib.parse import parse_qs
+
+            qs = {
+                k.lower(): [v.lower() for v in vals]
+                for k, vals in parse_qs(parsed.query).items()
+            }
+            if set(qs.get("format", [])) & {"jpg", "jpeg", "png", "webp", "gif"}:
+                return True
+            if any(val.startswith("image/") for vals in qs.values() for val in vals):
+                return True
+            return False
+
         except Exception:
             return False
 
@@ -360,7 +465,7 @@ class ResultConverter:
             )
 
         except Exception as e:
-            self.logger.error(f"Failed to convert batch results: {e}")
+            self.logger.error("Failed to convert batch results: %s", e, exc_info=True)
 
             # Return failed result
             return CrawlResult(
@@ -424,30 +529,8 @@ class ResultConverter:
             )
 
         except Exception as e:
-            self.logger.error(f"Failed to calculate statistics: {e}")
+            self.logger.error("Failed to calculate statistics: %s", e, exc_info=True)
             return CrawlStatistics()
-
-    def crawl_stats_to_statistics(self, stats: CrawlStats) -> CrawlStatistics:
-        """
-        Convert parallel engine CrawlStats to our CrawlStatistics model.
-
-        Args:
-            stats: CrawlStats from parallel engine
-
-        Returns:
-            CrawlStatistics compatible with our system
-        """
-        return CrawlStatistics(
-            total_pages_requested=stats.urls_requested,
-            total_pages_crawled=stats.urls_successful,
-            total_pages_failed=stats.urls_failed,
-            unique_domains=1,  # Would need additional info to calculate
-            total_links_discovered=0,  # Would need additional info to calculate
-            total_bytes_downloaded=stats.total_content_length,
-            crawl_duration_seconds=stats.total_duration,
-            pages_per_second=stats.pages_per_second,
-            average_page_size=stats.average_content_length,
-        )
 
     def create_minimal_page_content(
         self, url: str, error: str | None = None
@@ -478,7 +561,7 @@ class ResultConverter:
             links_count=0,
             images_count=0,
             metadata=metadata,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(UTC),
         )
 
     def validate_conversion(

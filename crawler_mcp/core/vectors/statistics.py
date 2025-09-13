@@ -281,6 +281,10 @@ class StatisticsCollector(BaseVectorService):
                 "error": str(e),
             }
 
+    async def get_client(self) -> AsyncQdrantClient:
+        """Public accessor for Qdrant client to keep encapsulation."""
+        return await self._get_client()
+
     async def _matches_domains(self, source_url: str, domains: list[str]) -> bool:
         """
         Check if source URL matches any of the specified domains.

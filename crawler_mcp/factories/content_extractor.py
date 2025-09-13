@@ -5,27 +5,69 @@ This module provides factory methods for creating content extraction configurati
 that prevent hash placeholders and ensure high-quality markdown content extraction.
 """
 
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+
 from crawl4ai import (
     CacheMode,
     CrawlerRunConfig,
-    DefaultMarkdownGenerator,
-    PruningContentFilter,
+)
+from crawl4ai import (
+    DefaultMarkdownGenerator as _RuntimeDefaultMarkdownGenerator,
+)
+from crawl4ai import (
+    PruningContentFilter as _RuntimePruningContentFilter,
 )
 
-from crawler_mcp.optimized_config import OptimizedConfig
+if TYPE_CHECKING:
+    from crawler_mcp.types.crawl4ai_types import (
+        DefaultMarkdownGenerator,
+        PruningContentFilter,
+    )
+else:
+    DefaultMarkdownGenerator = _RuntimeDefaultMarkdownGenerator
+    PruningContentFilter = _RuntimePruningContentFilter
+
+from crawler_mcp.constants import (
+    AGGRESSIVE_PAGE_TIMEOUT_MS,
+    CONSERVATIVE_PAGE_TIMEOUT_MS,
+)
+from crawler_mcp.settings import CrawlerSettings
+
+
+def normalize_timeout(value: int | float) -> int:
+    """
+    Normalize timeout value to milliseconds.
+
+    Args:
+        value: Timeout value (treated as ms if >= 1000, as seconds if < 1000)
+
+    Returns:
+        Timeout value in milliseconds
+    """
+    return int(value) if value >= 1000 else int(value * 1000)
 
 
 class ContentExtractorFactory:
     """Factory for content extraction configurations that prevent hash placeholders"""
 
-    def __init__(self, config: OptimizedConfig = None):
+    def __init__(
+        self, settings: CrawlerSettings, overrides: dict[str, Any] | None = None
+    ):
         """
         Initialize content extractor factory.
 
         Args:
-            config: Optional optimized crawler configuration
+            settings: Global settings instance
+            overrides: Optional runtime configuration overrides
         """
-        self.config = config or OptimizedConfig()
+        self.settings = settings
+        self.overrides = overrides or {}
+
+    def get_config_value(self, key: str, default: Any = None) -> Any:
+        """Get configuration value from overrides or settings."""
+        return self.overrides.get(key, getattr(self.settings, key, default))
 
     def create_markdown_generator(
         self,
@@ -46,21 +88,30 @@ class ContentExtractorFactory:
             DefaultMarkdownGenerator configured for optimal content extraction
         """
         # Use provided values or fall back to config defaults
-        # (Currently not used because content_filter is disabled by default to avoid placeholders.)
+        actual_content_threshold = (
+            content_threshold
+            if content_threshold is not None
+            else self.get_config_value("pruning_threshold", 0.45)
+        )
+        actual_min_word_threshold = (
+            min_word_threshold
+            if min_word_threshold is not None
+            else self.get_config_value("pruning_min_words", 5)
+        )
 
         # FIXED: Properly configure PruningContentFilter to avoid hash placeholders
         # Using fixed threshold and conservative settings to prevent empty content extraction
-        content_filter = PruningContentFilter(
-            threshold=0.45,  # Lower threshold keeps more content (0.48 is default)
+        content_filter = _RuntimePruningContentFilter(
+            threshold=actual_content_threshold,  # Use provided or config threshold
             threshold_type="fixed",  # Fixed prevents dynamic calculation issues that caused hash placeholders
-            min_word_threshold=5,  # Reasonable minimum for real content (nodes with <5 words ignored)
+            min_word_threshold=actual_min_word_threshold,  # Use provided or config minimum
         )
 
         # Configure markdown generation options
         markdown_options = {
             "skip_internal_links": False,  # Keep internal links for crawling
             "skip_external_links": True,  # Remove external links for focus
-            "include_images": self.config.extract_images,
+            "include_images": self.get_config_value("extract_images", False),
             "extract_tables": True,  # Preserve table data
             "heading_style": "atx",  # Use # heading style
             "code_block_style": "fenced",  # Use ``` code blocks
@@ -68,7 +119,7 @@ class ContentExtractorFactory:
             "link_style": "inline",  # Use [text](url) format
         }
 
-        return DefaultMarkdownGenerator(
+        return _RuntimeDefaultMarkdownGenerator(
             content_filter=content_filter, options=markdown_options
         )
 
@@ -83,7 +134,7 @@ class ContentExtractorFactory:
             DefaultMarkdownGenerator with aggressive content extraction
         """
         # More aggressive content filter
-        content_filter = PruningContentFilter(
+        content_filter = _RuntimePruningContentFilter(
             threshold=0.3,  # Lower threshold for more content
             threshold_type="dynamic",
             min_word_threshold=3,  # Very lenient word threshold
@@ -94,7 +145,7 @@ class ContentExtractorFactory:
             preserve_content_structure=False,  # Flatten structure for more content
         )
 
-        return DefaultMarkdownGenerator(
+        return _RuntimeDefaultMarkdownGenerator(
             content_filter=content_filter,
             options={
                 "skip_internal_links": False,
@@ -116,7 +167,7 @@ class ContentExtractorFactory:
             DefaultMarkdownGenerator optimized for speed
         """
         # Minimal content filter
-        content_filter = PruningContentFilter(
+        content_filter = _RuntimePruningContentFilter(
             threshold=0.6,  # Higher threshold for speed
             threshold_type="fixed",  # Fixed threshold for consistency
             min_word_threshold=10,
@@ -126,7 +177,7 @@ class ContentExtractorFactory:
             max_depth=5,  # Shallow processing
         )
 
-        return DefaultMarkdownGenerator(
+        return _RuntimeDefaultMarkdownGenerator(
             content_filter=content_filter,
             options={
                 "skip_internal_links": True,  # Skip links for speed
@@ -160,11 +211,18 @@ class ContentExtractorFactory:
 
         # Use provided tags or config defaults
         if excluded_tags is None:
-            excluded_tags = self.config.excluded_tags.copy()
+            excluded_tags = self.get_config_value(
+                "excluded_tags", ["script", "style", "noscript"]
+            ).copy()
 
         # Use provided robots setting or config default
         if check_robots is None:
-            check_robots = self.config.check_robots_txt
+            check_robots = bool(
+                self.get_config_value(
+                    "respect_robots_txt",
+                    not bool(self.get_config_value("ignore_robots_txt", True)),
+                )
+            )
 
         rc = CrawlerRunConfig(
             # Content extraction
@@ -172,16 +230,23 @@ class ContentExtractorFactory:
             # Tag filtering to prevent noise
             excluded_tags=excluded_tags,
             # Link handling
-            exclude_external_links=True,  # Focus on domain content
+            exclude_external_links=bool(
+                self.get_config_value(
+                    "exclude_external_links",
+                    not bool(self.get_config_value("include_external_links", False)),
+                )
+            ),
             # Performance and caching
             cache_mode=CacheMode.ENABLED
-            if self.config.enable_cache
+            if self.get_config_value("cache_enabled", True)
             else CacheMode.BYPASS,
             check_robots_txt=check_robots,
             # Content quality thresholds
-            word_count_threshold=self.config.min_word_count,
+            word_count_threshold=self.get_config_value("min_word_count", 10),
             # Timing optimizations
-            page_timeout=self.config.page_timeout,
+            page_timeout=self.get_config_value(
+                "page_timeout", 30000
+            ),  # Already in milliseconds
             delay_before_return_html=2.0,  # Delay for content loading
         )
 
@@ -210,7 +275,7 @@ class ContentExtractorFactory:
             cache_mode=CacheMode.ENABLED,
             check_robots_txt=False,  # Always ignore robots.txt
             word_count_threshold=20,  # Lower threshold for quality
-            page_timeout=60000,  # Longer timeout for quality
+            page_timeout=CONSERVATIVE_PAGE_TIMEOUT_MS,  # Longer timeout for quality
             delay_before_return_html=2.0,  # More time for content loading
         )
 
@@ -248,8 +313,8 @@ class ContentExtractorFactory:
             exclude_external_links=True,
             cache_mode=CacheMode.ENABLED,
             check_robots_txt=False,
-            word_count_threshold=self.config.min_word_count,
-            page_timeout=15000,  # Shorter timeout
+            word_count_threshold=self.get_config_value("min_word_count", 10),
+            page_timeout=AGGRESSIVE_PAGE_TIMEOUT_MS,  # Shorter timeout
             delay_before_return_html=0.1,  # Minimal delay
         )
 

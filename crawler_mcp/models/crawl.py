@@ -4,15 +4,27 @@ Data models for web crawling operations.
 
 from __future__ import annotations
 
+import logging
+import math
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator
+
+logger = logging.getLogger(__name__)
+
+
+def get_embedding_dim() -> int:
+    """Get embedding dimension from configuration at runtime."""
+    from crawler_mcp.settings import get_settings
+
+    settings = get_settings()
+    return settings.embedding_dimension
 
 
 # Reusable validator function
-def calculate_word_count_validator(v: int, info: Any) -> int:
+def calculate_word_count_validator(v: int, info: ValidationInfo) -> int:
     """Pydantic validator to calculate word count from content."""
     if v == 0 and info.data and "content" in info.data:
         content = info.data["content"]
@@ -44,17 +56,147 @@ class PageContent(BaseModel):
     links: list[str] = Field(default_factory=list)
     images: list[str] = Field(default_factory=list)
     word_count: int = 0
+    links_count: int = Field(default=0, ge=0)
+    images_count: int = Field(default=0, ge=0)
     metadata: dict[str, Any] = Field(default_factory=dict)
     timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    embedding: list[float] | None = Field(default=None, repr=False)
 
-    @field_validator("word_count", mode="before")
+    _validate_word_count = field_validator("word_count", mode="before")(
+        calculate_word_count_validator
+    )
+
+    @field_validator("links_count", mode="before")
     @classmethod
-    def validate_word_count(cls, v: int, info: Any) -> int:
-        """Calculate word count from content if not provided."""
-        if v == 0 and info.data and "content" in info.data:
-            content = info.data["content"]
-            if content and isinstance(content, str):
-                return len(content.split())
+    def derive_links_count(cls, v: int | None, info: ValidationInfo) -> int:
+        """Derive links_count from links list if not explicitly set, with consistency validation."""
+        if info.data and "links" in info.data:
+            links = info.data.get("links", [])
+            if not isinstance(links, list):
+                links = []
+            actual_count = len(links)
+
+            if v is None or v == 0:
+                return actual_count
+
+            if v != actual_count:
+                logging.getLogger(__name__).debug(
+                    f"Links count mismatch: provided={v}, actual={actual_count}"
+                )
+
+        return v if v is not None else 0
+
+    @field_validator("images_count", mode="before")
+    @classmethod
+    def derive_images_count(cls, v: int | None, info: ValidationInfo) -> int:
+        """Derive images_count from images list if not explicitly set."""
+        if info.data and "images" in info.data:
+            images = info.data.get("images", [])
+            if not isinstance(images, list):
+                images = []
+
+            if v is None or v == 0:
+                return len(images)
+
+        return v if v is not None else 0
+
+    @field_validator("embedding")
+    @classmethod
+    def validate_embedding_dimension(
+        cls, v: list[float] | None, info: ValidationInfo
+    ) -> list[float] | None:
+        """Validate embedding has correct dimension and valid values with hardened security."""
+        if v is not None:
+            # Basic type and structure validation
+            if not isinstance(v, list):
+                raise ValueError(f"Embedding must be a list, got {type(v)}")
+
+            if len(v) == 0:
+                raise ValueError("Embedding cannot be empty")
+
+            # Get expected dimension from configuration
+            expected_dim = get_embedding_dim()
+
+            # Validate against configured dimension
+            if len(v) != expected_dim:
+                raise ValueError(
+                    f"Embedding dimension mismatch: expected {expected_dim}, got {len(v)}. "
+                    f"Check if embedding model is configured correctly."
+                )
+
+            # Check for finite values and valid float types with value bounds
+            extreme_values = []
+            for i, val in enumerate(v):
+                if not isinstance(val, (int, float)):
+                    raise ValueError(
+                        f"Embedding value at index {i} must be numeric, got {type(val)}: {val}"
+                    )
+                if not math.isfinite(val):
+                    raise ValueError(
+                        f"Embedding contains non-finite value at index {i}: {val}"
+                    )
+                # Check for reasonable value bounds (most embeddings are in [-10, 10] range)
+                if abs(val) > 100.0:
+                    extreme_values.append((i, val))
+
+            if extreme_values:
+                raise ValueError(
+                    f"Embedding contains {len(extreme_values)} extreme values (>100): "
+                    f"{extreme_values[:3]}{'...' if len(extreme_values) > 3 else ''}. "
+                    "This may indicate corrupted or unnormalized embeddings."
+                )
+
+            # Detect suspicious patterns
+            v_set = set(v)
+            if len(v_set) == 1:
+                logger.debug(
+                    f"Embedding has all identical values ({next(iter(v_set))}). "
+                    f"Vector length: {len(v)}. "
+                    "This indicates degenerate or corrupted embedding."
+                )
+            if len(v_set) < len(v) * 0.1:  # Less than 10% unique values
+                logger.debug(
+                    f"Embedding has suspiciously few unique values ({len(v_set)}/{len(v)}). "
+                    "This may indicate corrupted or quantized embedding."
+                )
+
+            # Validate vector norm (embeddings should have reasonable magnitude)
+            norm = math.sqrt(sum(x * x for x in v))
+            if norm == 0.0:
+                raise ValueError("Embedding has zero norm (all values are zero)")
+            if norm < 1e-6:
+                raise ValueError(
+                    f"Embedding has suspiciously small norm ({norm:.2e}). "
+                    "This may indicate corrupted or scaled embedding."
+                )
+            if norm > 1000.0:
+                raise ValueError(
+                    f"Embedding has suspiciously large norm ({norm:.2f}). "
+                    "This may indicate unnormalized or corrupted embedding."
+                )
+
+            # Get expected dimension from runtime accessor with proper error handling
+            try:
+                expected_dim = get_embedding_dim()
+            except Exception as e:
+                raise ValueError(
+                    f"Failed to get expected embedding dimension from configuration: {e}. "
+                    "Ensure EMBEDDING_DIMENSION environment variable is properly set."
+                ) from e
+
+            # Validate dimension bounds
+            if expected_dim <= 0:
+                raise ValueError(
+                    f"Invalid expected embedding dimension: {expected_dim}. "
+                    "EMBEDDING_DIMENSION must be a positive integer."
+                )
+
+            if len(v) != expected_dim:
+                raise ValueError(
+                    f"Embedding dimension mismatch: expected {expected_dim}, got {len(v)}. "
+                    f"To fix: Either recompute embeddings with dimension {expected_dim} or "
+                    f"update EMBEDDING_DIMENSION environment variable to {len(v)}."
+                )
         return v
 
 
@@ -63,7 +205,7 @@ class CrawlRequest(BaseModel):
 
     model_config = ConfigDict()
 
-    url: str | list[str]
+    url: list[str]
     max_pages: int | None = Field(default=100, ge=1, le=1000)
     max_depth: int | None = Field(default=3, ge=1, le=10)
     include_patterns: list[str] | None = None

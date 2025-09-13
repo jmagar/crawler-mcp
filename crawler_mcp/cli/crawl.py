@@ -22,10 +22,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv  # type: ignore
+except Exception:  # pragma: no cover
+    load_dotenv = None
 
-from crawler_mcp.crawl_core import CrawlOrchestrator
-from crawler_mcp.optimized_config import OptimizedConfig
+from crawler_mcp.core import CrawlOrchestrator
 from crawler_mcp.utils.log_manager import LogManager
 from crawler_mcp.utils.output_manager import OutputManager
 
@@ -35,11 +37,11 @@ def _bool(x: str) -> bool:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    # Ensure env is loaded for OptimizedConfig.from_env()
+    # Ensure env is loaded for settings
     pkg_root = Path(__file__).resolve().parents[1]
-    load_dotenv(pkg_root / ".env", override=False)
-    load_dotenv(pkg_root.parent / ".env", override=False)
-    load_dotenv(pkg_root / "crawlers" / "optimized" / ".env", override=False)
+    if load_dotenv:
+        load_dotenv(pkg_root / ".env", override=False)
+        load_dotenv(pkg_root.parent / ".env", override=False)
     p = argparse.ArgumentParser("optimized-crawler")
     p.add_argument(
         "--url",
@@ -63,8 +65,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--output-dir",
-        default="./output",
-        help="Base output directory (default: ./output)",
+        default="./.crawl4ai",
+        help="Base output directory (default: ./.crawl4ai)",
     )
     p.add_argument(
         "--no-backup",
@@ -111,7 +113,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--stream",
         action="store_true",
-        help="Stream results (lower latency, same final output)",
+        help="(Deprecated) Stream results; use ENABLE_STREAMING=1 env instead",
     )
     p.add_argument(
         "--preset-13700k",
@@ -429,84 +431,102 @@ async def _run(args: argparse.Namespace) -> int:
 
     _load_env()
 
-    # Start from env-driven config, then apply CLI overrides
-    cfg = OptimizedConfig.from_env()
-    cfg.max_urls_to_discover = args.max_urls
-    cfg.max_concurrent_crawls = args.concurrency
-    cfg.content_validation = args.content_validation
-    cfg.page_timeout = int(args.page_timeout_ms)
-    cfg.output_dir = args.output_dir
+    # Create overrides dict from CLI arguments
+    from ..settings import get_settings
+
+    settings = get_settings()
+
+    overrides = {
+        "max_urls_to_discover": args.max_urls,
+        "max_concurrent_crawls": args.concurrency,
+        "content_validation": args.content_validation,
+        "page_timeout": max(1000, args.page_timeout_ms),
+        "output_dir": args.output_dir,
+    }
+
     if args.doc_relax:
-        cfg.doc_relax_validation_patterns = list(args.doc_relax)
+        overrides["doc_relax_validation_patterns"] = list(args.doc_relax)
 
     # Apply performance toggles
     if args.aggressive:
-        cfg = cfg.get_aggressive_config()
+        overrides.update(
+            {
+                "max_concurrent_crawls": max(args.concurrency, 20),
+                "memory_threshold_percent": 85,
+                "page_timeout": 15000,  # milliseconds
+            }
+        )
 
     if args.preset_13700k:
         # Tailored for i7-13700K class machines
-        cfg = cfg.get_aggressive_config()
-        cfg.max_concurrent_crawls = max(cfg.max_concurrent_crawls, 28)
-        cfg.memory_threshold = max(cfg.memory_threshold, 85.0)
-        cfg.page_timeout = min(cfg.page_timeout, 15000)
+        overrides.update(
+            {
+                "max_concurrent_crawls": max(args.concurrency, 28),
+                "memory_threshold_percent": 85,
+                "page_timeout": min(int(args.page_timeout_ms), 15000),  # milliseconds
+            }
+        )
 
     if args.no_cache:
-        cfg.enable_cache = False
+        overrides["cache_enabled"] = False
 
     if args.javascript is not None:
-        cfg.browser_mode = "full" if bool(args.javascript) else "text"
+        overrides["browser_mode"] = "full" if bool(args.javascript) else "text"
+        overrides["browser_js_enabled"] = bool(args.javascript)
 
     # JS retry removed - using browser_mode configuration instead
 
     # Embeddings configuration
     if args.embeddings is not None:
-        cfg.enable_embeddings = bool(args.embeddings)
+        overrides["enable_embeddings"] = bool(args.embeddings)
     if args.tei_endpoint:
-        cfg.tei_endpoint = args.tei_endpoint
+        overrides["tei_endpoint"] = args.tei_endpoint
     if args.tei_batch is not None:
-        cfg.tei_batch_size = int(args.tei_batch)
+        overrides["tei_batch_size"] = int(args.tei_batch)
     if args.tei_parallel is not None:
-        cfg.tei_parallel_requests = max(1, int(args.tei_parallel))
+        overrides["tei_parallel_requests"] = max(1, int(args.tei_parallel))
     if args.tei_timeout_s is not None:
-        cfg.tei_timeout_s = float(args.tei_timeout_s)
+        overrides["tei_timeout_s"] = float(args.tei_timeout_s)
     if args.tei_max_concurrent is not None:
-        cfg.tei_max_concurrent_requests = max(1, int(args.tei_max_concurrent))
+        overrides["tei_max_concurrent_requests"] = max(1, int(args.tei_max_concurrent))
     if args.tei_max_client_batch is not None:
-        cfg.tei_max_client_batch_size = max(1, int(args.tei_max_client_batch))
+        overrides["tei_max_client_batch_size"] = max(1, int(args.tei_max_client_batch))
     if args.tei_max_batch_tokens is not None:
-        cfg.tei_max_batch_tokens = max(0, int(args.tei_max_batch_tokens))
+        overrides["tei_max_batch_tokens"] = max(0, int(args.tei_max_batch_tokens))
     if args.tei_chars_per_token is not None:
-        cfg.tei_chars_per_token = max(0.1, float(args.tei_chars_per_token))
+        overrides["tei_chars_per_token"] = max(0.1, float(args.tei_chars_per_token))
     if args.tei_max_input_chars is not None:
-        cfg.tei_max_input_chars = max(0, int(args.tei_max_input_chars))
+        overrides["tei_max_input_chars"] = max(0, int(args.tei_max_input_chars))
     if args.tei_target_chars_per_batch is not None:
-        cfg.tei_target_chars_per_batch = max(1000, int(args.tei_target_chars_per_batch))
+        overrides["tei_target_chars_per_batch"] = max(
+            1000, int(args.tei_target_chars_per_batch)
+        )
     if args.tei_collapse_ws is not None:
-        cfg.tei_collapse_whitespace = bool(args.tei_collapse_ws)
+        overrides["tei_collapse_whitespace"] = bool(args.tei_collapse_ws)
     if args.embedding_target_dim is not None:
-        cfg.embedding_target_dim = max(0, int(args.embedding_target_dim))
+        overrides["embedding_target_dim"] = max(0, int(args.embedding_target_dim))
     if args.embedding_projection is not None:
-        cfg.embedding_projection = args.embedding_projection
+        overrides["embedding_projection"] = args.embedding_projection
 
     # Qdrant configuration
     if args.qdrant is not None:
-        cfg.enable_qdrant = bool(args.qdrant)
+        overrides["enable_qdrant"] = bool(args.qdrant)
     if args.qdrant_url:
-        cfg.qdrant_url = args.qdrant_url
+        overrides["qdrant_url"] = args.qdrant_url
     if args.qdrant_collection:
-        cfg.qdrant_collection = args.qdrant_collection
+        overrides["qdrant_collection"] = args.qdrant_collection
     if args.qdrant_distance:
-        cfg.qdrant_distance = args.qdrant_distance
+        overrides["qdrant_distance"] = args.qdrant_distance
     if args.qdrant_vectors_name is not None:
-        cfg.qdrant_vectors_name = args.qdrant_vectors_name or ""
+        overrides["qdrant_vectors_name"] = args.qdrant_vectors_name or ""
     if args.qdrant_batch is not None:
-        cfg.qdrant_batch_size = int(args.qdrant_batch)
+        overrides["qdrant_batch_size"] = int(args.qdrant_batch)
     if args.qdrant_parallel is not None:
-        cfg.qdrant_parallel_requests = max(1, int(args.qdrant_parallel))
+        overrides["qdrant_parallel_requests"] = max(1, int(args.qdrant_parallel))
     if args.qdrant_wait is not None:
-        cfg.qdrant_upsert_wait = bool(args.qdrant_wait)
+        overrides["qdrant_upsert_wait"] = bool(args.qdrant_wait)
     if args.qdrant_api_key:
-        cfg.qdrant_api_key = args.qdrant_api_key
+        overrides["qdrant_api_key"] = args.qdrant_api_key
 
     # Language filtering
     if args.allowed_locales is not None:
@@ -521,7 +541,7 @@ async def _run(args: argparse.Namespace) -> int:
                 locales = []
                 break
             locales.extend([p.strip() for p in e.split(",") if p.strip()])
-        cfg.allowed_locales = [loc.lower() for loc in locales]
+        overrides["allowed_locales"] = [loc.lower() for loc in locales]
 
     # Subcommand: Qdrant semantic search
     if getattr(args, "qdrant_search", None):
@@ -537,9 +557,11 @@ async def _run(args: argparse.Namespace) -> int:
         from ..clients.tei_client import TEIEmbeddingsClient
 
         async with TEIEmbeddingsClient(
-            cfg.tei_endpoint,
-            model=(cfg.tei_model_name or None),
-            timeout_s=max(5.0, float(cfg.tei_timeout_s)),
+            overrides.get("tei_endpoint", settings.tei_url),
+            model=(overrides.get("tei_model_name", settings.tei_model) or None),
+            timeout_s=max(
+                5.0, float(overrides.get("tei_timeout_s", settings.tei_timeout))
+            ),
         ) as tei:
             vecs = await tei.embed_texts([query])
         if not vecs or not isinstance(vecs[0], list):
@@ -579,10 +601,17 @@ async def _run(args: argparse.Namespace) -> int:
             qfilter = {"must": must}
 
         async with QdrantClient(
-            cfg.qdrant_url, api_key=cfg.qdrant_api_key, timeout_s=15.0
+            overrides.get("qdrant_url", settings.qdrant_url),
+            api_key=overrides.get(
+                "qdrant_api_key",
+                settings.qdrant_api_key.get_secret_value()
+                if settings.qdrant_api_key
+                else None,
+            ),
+            timeout_s=15.0,
         ) as qc:
             res = await qc.search(
-                cfg.qdrant_collection,
+                overrides.get("qdrant_collection", settings.qdrant_collection),
                 vector=qvec,
                 limit=topk,
                 with_payload=True,
@@ -603,21 +632,23 @@ async def _run(args: argparse.Namespace) -> int:
 
         if args.rerank is not None:
             do_rerank = bool(args.rerank)
-        elif getattr(cfg, "enable_rerank", False):
+        elif overrides.get("enable_rerank", settings.reranker_enabled):
             do_rerank = True
         else:
             do_rerank = auto_cuda  # auto default to local GPU when available
 
         if do_rerank and hits:
-            rerank_topk = int(args.rerank_topk or getattr(cfg, "rerank_topk", 5) or 5)
+            rerank_topk = int(args.rerank_topk or overrides.get("rerank_topk", 5) or 5)
             # endpoint resolution: arg > cfg > auto('local' if cuda else '')
             rerank_ep = (
                 args.rerank_endpoint
-                or getattr(cfg, "rerank_endpoint", "")
+                or overrides.get("rerank_endpoint", "")
                 or ("local" if auto_cuda else "")
             )
             rerank_model = (
-                args.rerank_model or getattr(cfg, "rerank_model_name", "") or ""
+                args.rerank_model
+                or overrides.get("rerank_model_name", settings.reranker_model)
+                or ""
             )
             docs = []
             for h in hits:
@@ -801,17 +832,39 @@ async def _run(args: argparse.Namespace) -> int:
     )
 
     # Initialize output and log managers
-    output_mgr = OutputManager(args.output_dir, cfg)
-    log_mgr = LogManager(os.path.join(args.output_dir, "logs"))
+    output_mgr = OutputManager(args.output_dir)
+    log_mgr = LogManager("./logs")
 
     # Setup logging
     crawl_logger = log_mgr.setup_crawl_logger()
     error_logger = log_mgr.setup_error_logger()
     console_logger = log_mgr.setup_console_logger()
 
+    # Keep url_discovery visible after handler reset
+    url_discovery_logger = logging.getLogger("url_discovery")
+    url_discovery_logger.propagate = False
+    for h in console_logger.handlers:
+        if h not in url_discovery_logger.handlers:
+            url_discovery_logger.addHandler(h)
+    if getattr(args, "stream", False):
+        console_logger.warning(
+            "Flag --stream is deprecated; setting ENABLE_STREAMING=1 for this run."
+        )
+        os.environ.setdefault("ENABLE_STREAMING", "1")
+        try:
+            from ..settings import get_settings
+
+            # Update the singleton settings instance
+            updated_settings = get_settings()
+            updated_settings.enable_streaming = True
+            # Update our local settings reference to match the modified singleton
+            settings = updated_settings
+        except Exception:
+            pass
+
     # Clean outputs if requested
     if args.clean_outputs:
-        console_logger.info("Cleaning output directory...")
+        console_logger.info("Cleaning %s directory...", args.output_dir)
         output_mgr.cleanup_old_outputs()
         output_mgr.clean_cache()
 
@@ -826,7 +879,7 @@ async def _run(args: argparse.Namespace) -> int:
     crawl_logger.info(f"Output directory: {args.output_dir}")
     crawl_logger.info(f"Domain: {domain}")
 
-    strat = CrawlOrchestrator(cfg)
+    strat = CrawlOrchestrator(settings, overrides)
 
     # Optional: human-friendly per-page logs via monitoring hooks
     if args.per_page_log or show_progress:
@@ -898,11 +951,9 @@ async def _run(args: argparse.Namespace) -> int:
             strat.set_hook("performance_sample", on_performance_sample)
     await strat.start()
     try:
-        # Force streaming when per-page logging is requested to reduce latency
+        # Streaming is controlled by ENABLE_STREAMING environment variable (or --stream)
         crawl_logger.info(f"Beginning crawl of {args.url}")
-        resp = await strat.crawl(
-            args.url, stream=(args.stream or args.per_page_log or show_progress)
-        )
+        resp = await strat.crawl(args.url)
         crawl_logger.info("Crawl completed successfully")
 
         # Save outputs using OutputManager (unless --skip-output)
@@ -957,13 +1008,18 @@ async def _run(args: argparse.Namespace) -> int:
             console_logger.info("📝 Outputs not saved (--skip-output)")
 
         # Optional: verify Qdrant contents
-        if cfg.enable_qdrant and args.verify_qdrant:
+        if overrides.get("enable_qdrant", False) and args.verify_qdrant:
             try:
                 from ..clients.qdrant_http_client import QdrantClient
 
-                qurl = cfg.qdrant_url
-                qcol = cfg.qdrant_collection
-                qkey = cfg.qdrant_api_key
+                qurl = overrides.get("qdrant_url", settings.qdrant_url)
+                qcol = overrides.get("qdrant_collection", settings.qdrant_collection)
+                qkey = overrides.get(
+                    "qdrant_api_key",
+                    settings.qdrant_api_key.get_secret_value()
+                    if settings.qdrant_api_key
+                    else None,
+                )
                 async with QdrantClient(qurl, api_key=qkey, timeout_s=15.0) as qc:
                     info = await qc.get_collection(qcol)
                     cnt = await qc.count_points(qcol, exact=False)

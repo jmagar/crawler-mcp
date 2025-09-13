@@ -4,7 +4,7 @@ Data models for RAG (Retrieval-Augmented Generation) operations.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -17,7 +17,7 @@ class DocumentChunk(BaseModel):
 
     """A chunk of document content with metadata."""
 
-    id: str
+    id: int | str  # Can be int for Qdrant or str for legacy
     content: str
     embedding: list[float] | None = None
     source_url: str
@@ -26,14 +26,16 @@ class DocumentChunk(BaseModel):
     word_count: int = 0
     char_count: int = 0
     metadata: dict[str, Any] = Field(default_factory=dict)
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     # Deduplication fields
     content_hash: str | None = None  # SHA256 hash of content for change detection
     previous_hash: str | None = None  # Previous content hash if content changed
-    first_seen: datetime = Field(default_factory=datetime.utcnow)  # When first crawled
+    first_seen: datetime = Field(
+        default_factory=lambda: datetime.now(UTC)
+    )  # When first crawled
     last_modified: datetime = Field(
-        default_factory=datetime.utcnow
+        default_factory=lambda: datetime.now(UTC)
     )  # When content last changed
 
     # Crawl provenance tracking
@@ -138,7 +140,7 @@ class RagResult(BaseModel):
     embedding_time: float = 0.0
     search_time: float = 0.0
     rerank_time: float | None = None
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
     @property
     def has_high_confidence_matches(self) -> bool:

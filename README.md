@@ -2,7 +2,7 @@
 
 A powerful, production-ready Model Context Protocol (MCP) server that combines advanced web crawling capabilities with semantic search through RAG (Retrieval-Augmented Generation). Built with **FastMCP 2.0**, **Crawl4AI 0.7.0**, **Qdrant vector database**, and **Qwen3-Embedding-0.6B** for multilingual semantic understanding.
 
-[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP](https://img.shields.io/badge/FastMCP-2.0-green.svg)](https://github.com/jlowin/fastmcp)
 [![Crawl4AI](https://img.shields.io/badge/Crawl4AI-0.7.0-orange.svg)](https://github.com/unclecode/crawl4ai)
 [![Qdrant](https://img.shields.io/badge/Qdrant-1.15.1-red.svg)](https://qdrant.tech/)
@@ -34,7 +34,7 @@ A powerful, production-ready Model Context Protocol (MCP) server that combines a
 
 ### Prerequisites
 - Docker & Docker Compose
-- Python 3.9+
+- Python 3.11+
 - 8GB+ RAM recommended
 - NVIDIA GPU (optional, for TEI acceleration)
 
@@ -73,7 +73,7 @@ pip install -e .[ml]
 ### 4. Run the Server
 ```bash
 # Development mode with hot reload
-fastmcp dev crawler_mcp/crawlers/optimized/server.py
+fastmcp dev crawler_mcp/server.py
 
 # Or run directly
 uv run python -m crawler_mcp.server
@@ -108,8 +108,9 @@ Perform a comprehensive health check of all services.
 Get detailed information about the server configuration and capabilities.
 
 **Note**: Web crawling limits are configured via environment variables:
-- `CRAWL_MAX_PAGES` (default: 1000) - Maximum pages to crawl per site
-- `CRAWL_MAX_DEPTH` (default: 3) - Maximum crawling depth
+
+- `MAX_PAGES` (default: 100) - Maximum pages to crawl per site
+- `MAX_DEPTH` (default: 3) - Maximum crawling depth
 
 **With Deduplication (Re-crawls):**
 ```json
@@ -239,7 +240,7 @@ graph TB
 ```bash
 # Vector Database
 QDRANT_URL=http://localhost:7000
-QDRANT_COLLECTION=crawlerr_documents
+QDRANT_COLLECTION=crawler_documents
 
 # Text Embeddings Inference
 TEI_URL=http://localhost:8080
@@ -321,7 +322,7 @@ text-embeddings-inference:
 crawler-mcp/
 ├── crawler_mcp/              # Main application package
 │   ├── server.py            # FastMCP server entry point
-│   ├── config.py            # Pydantic settings management
+│   ├── settings.py          # Pydantic settings management (single source of truth)
 │   ├── models/              # Pydantic data models
 │   ├── core/                # Core services (embeddings, vectors, rag, sources)
 │   ├── tools/               # MCP tool implementations
@@ -335,16 +336,16 @@ crawler-mcp/
 ### Development Commands
 ```bash
 # Start development server with hot reload
-fastmcp dev crawler_mcp/crawlers/optimized/server.py
+fastmcp dev crawler_mcp/server.py
 
 # Run tests
 uv run pytest
 
 # Install for Claude Desktop
-fastmcp install claude-desktop crawler_mcp/crawlers/optimized/server.py
+fastmcp install claude-desktop crawler_mcp/server.py
 
 # Install for Claude Code
-fastmcp install claude-code crawler_mcp/crawlers/optimized/server.py
+fastmcp install claude-code crawler_mcp/server.py
 ```
 
 ## 🐳 Docker Deployment
@@ -405,7 +406,7 @@ The included `docker-compose.yml` provides production-ready services:
 ### Claude Code CLI
 ```bash
 # Install and configure
-fastmcp install claude-code crawler_mcp/crawlers/optimized/server.py
+fastmcp install claude-code crawler_mcp/server.py
 ```
 
 ## 📄 License

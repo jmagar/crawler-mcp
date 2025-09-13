@@ -545,10 +545,12 @@ source = { editable = "." }
 dependencies = [
     { name = "chardet" },
     { name = "crawl4ai" },
+    { name = "cssselect" },
     { name = "fastapi" },
     { name = "fastmcp" },
     { name = "gitpython" },
     { name = "httpx" },
+    { name = "portalocker" },
     { name = "psutil" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -563,7 +565,6 @@ dependencies = [
     { name = "tiktoken" },
     { name = "torch" },
     { name = "transformers" },
-    { name = "types-requests" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -581,6 +582,7 @@ dev = [
     { name = "ruff" },
     { name = "types-psutil" },
     { name = "types-python-dateutil" },
+    { name = "types-requests" },
 ]
 
 [package.dev-dependencies]
@@ -594,12 +596,14 @@ requires-dist = [
     { name = "chardet", specifier = ">=5.2.0" },
     { name = "coverage", marker = "extra == 'dev'", specifier = ">=7.10.3" },
     { name = "crawl4ai", specifier = ">=0.7.2" },
+    { name = "cssselect", specifier = ">=1.3.0" },
     { name = "fastapi", specifier = ">=0.104.1" },
     { name = "fastmcp", specifier = ">=2.0.0" },
     { name = "gitpython", specifier = ">=3.1.40" },
     { name = "httpx", specifier = ">=0.25.0" },
     { name = "inline-snapshot", marker = "extra == 'dev'", specifier = ">=0.7.0" },
     { name = "mypy", marker = "extra == 'dev'", specifier = ">=1.17.0" },
+    { name = "portalocker", specifier = ">=3.2.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=3.5.0" },
     { name = "psutil", specifier = ">=5.9.0" },
     { name = "pydantic", specifier = ">=2.5.0" },
@@ -623,7 +627,7 @@ requires-dist = [
     { name = "transformers", specifier = ">=4.55.0" },
     { name = "types-psutil", marker = "extra == 'dev'", specifier = ">=7.0.0.20250801" },
     { name = "types-python-dateutil", marker = "extra == 'dev'", specifier = ">=2.9.0.20241003" },
-    { name = "types-requests", specifier = ">=2.32.4.20250809" },
+    { name = "types-requests", marker = "extra == 'dev'", specifier = ">=2.32.4.20250809" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
 ]
 provides-extras = ["dev"]
@@ -673,6 +677,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/1c/c5/8c59d6b7c7b439ba4fc8d0cab868027fd095f215031bc123c3a070962912/cryptography-45.0.7-pp311-pypy311_pp73-manylinux_2_34_aarch64.whl", hash = "sha256:2f641b64acc00811da98df63df7d59fd4706c0df449da71cb7ac39a0732b40ae", size = 4149023, upload-time = "2025-09-01T11:14:55.022Z" },
     { url = "https://files.pythonhosted.org/packages/55/32/05385c86d6ca9ab0b4d5bb442d2e3d85e727939a11f3e163fc776ce5eb40/cryptography-45.0.7-pp311-pypy311_pp73-manylinux_2_34_x86_64.whl", hash = "sha256:f5414a788ecc6ee6bc58560e85ca624258a55ca434884445440a810796ea0e0b", size = 4385722, upload-time = "2025-09-01T11:14:57.319Z" },
     { url = "https://files.pythonhosted.org/packages/23/87/7ce86f3fa14bc11a5a48c30d8103c26e09b6465f8d8e9d74cf7a0714f043/cryptography-45.0.7-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:1f3d56f73595376f4244646dd5c5870c14c196949807be39e79e7bd9bac3da63", size = 3332908, upload-time = "2025-09-01T11:14:58.78Z" },
+]
+
+[[package]]
+name = "cssselect"
+version = "1.3.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/72/0a/c3ea9573b1dc2e151abfe88c7fe0c26d1892fe6ed02d0cdb30f0d57029d5/cssselect-1.3.0.tar.gz", hash = "sha256:57f8a99424cfab289a1b6a816a43075a4b00948c86b4dcf3ef4ee7e15f7ab0c7", size = 42870, upload-time = "2025-03-10T09:30:29.638Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ee/58/257350f7db99b4ae12b614a36256d9cc870d71d9e451e79c2dc3b23d7c3c/cssselect-1.3.0-py3-none-any.whl", hash = "sha256:56d1bf3e198080cc1667e137bc51de9cadfca259f03c2d4e09037b3e01e30f0d", size = 18786, upload-time = "2025-03-10T09:30:28.048Z" },
 ]
 
 [[package]]

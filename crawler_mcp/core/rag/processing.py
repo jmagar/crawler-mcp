@@ -10,16 +10,19 @@ from __future__ import annotations
 import logging
 import time
 from collections.abc import Callable
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
-from ...config import settings
+from crawler_mcp.settings import get_settings
+
 from ...core.vectors import VectorService
 from ...models.crawl import CrawlResult, PageContent
 from ...models.rag import DocumentChunk
 from .chunking import AdaptiveChunker
 from .deduplication import VectorDeduplicationManager
 from .embedding import EmbeddingPipeline
+
+settings = get_settings()
 
 logger = logging.getLogger(__name__)
 
@@ -298,7 +301,7 @@ class WorkflowManager:
         return {
             "pipeline_health": pipeline_health,
             "progress_status": progress_status,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
 
@@ -343,7 +346,7 @@ class ProcessingPipeline:
         crawl_result: CrawlResult,
         deduplication: bool | None = None,
         force_update: bool = False,
-        progress_callback: Callable[..., None] | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
         seed_url: str | None = None,
         crawl_session_id: str | None = None,
     ) -> dict[str, int]:
@@ -529,7 +532,7 @@ class ProcessingPipeline:
                             )
 
                     # Create document chunk
-                    now = datetime.utcnow()
+                    now = datetime.now(UTC)
                     # Determine discovery method based on URL relationship to seed
                     discovery_method = "manual"  # Default fallback
                     if seed_url:
@@ -861,7 +864,7 @@ class ProcessingPipeline:
         health_status = {
             "pipeline_initialized": self._initialized,
             "chunker_type": type(self.chunker).__name__,
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         }
 
         # Check embedding pipeline health

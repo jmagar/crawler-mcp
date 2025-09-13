@@ -5,6 +5,7 @@ This module provides standardized validators to replace the 37+ validation funct
 with similar patterns found throughout the codebase.
 """
 
+import os
 import re
 import urllib.parse
 from collections.abc import Collection
@@ -246,10 +247,8 @@ class PathValidator(BaseValidator):
                     f"{field_name} must be a directory: {path}"
                 )
 
-            # Permission checks
-            if (
-                self.must_be_readable and not path.exists()
-            ):  # Can't check if doesn't exist
+            # Permission checks using os.access() for accurate permission testing
+            if self.must_be_readable and not os.access(path, os.R_OK):
                 return ValidationResult.failure(
                     f"{field_name} must be readable: {path}"
                 )
@@ -260,6 +259,10 @@ class PathValidator(BaseValidator):
                 if not check_path.exists():
                     return ValidationResult.failure(
                         f"{field_name} parent directory does not exist: {path}"
+                    )
+                if not os.access(check_path, os.W_OK):
+                    return ValidationResult.failure(
+                        f"{field_name} must be writable: {check_path}"
                     )
 
         # Extension check
@@ -351,18 +354,22 @@ class CollectionValidator(BaseValidator):
 
         # Uniqueness check
         if self.unique_items:
-            unique_items = (
-                set(value)
-                if all(
-                    isinstance(item, str | int | float | bool | type(None))
-                    for item in value
-                )
-                else []
-            )
-            if len(unique_items) != len(value):
-                return ValidationResult.failure(
-                    f"{field_name} must contain unique items"
-                )
+            if all(
+                isinstance(item, str | int | float | bool | type(None))
+                for item in value
+            ):
+                if len(set(value)) != len(value):
+                    return ValidationResult.failure(
+                        f"{field_name} must contain unique items"
+                    )
+            else:
+                seen: list[object] = []
+                for item in value:
+                    if any(item is s or item == s for s in seen):
+                        return ValidationResult.failure(
+                            f"{field_name} must contain unique items"
+                        )
+                    seen.append(item)
 
         # Validate individual items
         if self.item_validator:

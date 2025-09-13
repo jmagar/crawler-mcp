@@ -16,14 +16,15 @@ from datetime import datetime, timedelta
 from threading import RLock
 from typing import Any
 
-from fastmcp.exceptions import ToolError
-
-from ...config import settings
 from ...models.crawl import CrawlResult
 from ...models.rag import DocumentChunk, RagQuery, RagResult, SearchMatch
+from ...settings import get_settings
+
+settings = get_settings()
 from ..embeddings import EmbeddingService
-from ..utils import normalize_url
+from ..exceptions import ServiceError
 from ..vectors import VectorService
+from .deduplication import VectorDeduplicationManager
 from .processing import ProcessingPipeline
 
 logger = logging.getLogger(__name__)
@@ -63,7 +64,7 @@ class QueryCache:
             str(date_range) if date_range else "",
         ]
         key_string = "|".join(key_components)
-        return hashlib.md5(key_string.encode()).hexdigest()
+        return hashlib.blake2b(key_string.encode(), digest_size=32).hexdigest()
 
     def get(
         self,
@@ -263,7 +264,7 @@ class RagService:
             logger.warning("tiktoken not available, using character-based chunking")
             self.tokenizer_type = "character"
 
-        # Initialize Qwen3 reranker with GPU optimization
+        # Initialize CrossEncoder reranker with GPU optimization
         self.reranker = None
         self.reranker_type = "none"
 
@@ -280,9 +281,9 @@ class RagService:
                     # Force GPU usage for reranker if available
                     device = "cuda:0" if torch.cuda.is_available() else "cpu"
                     self.reranker = CrossEncoder(settings.reranker_model, device=device)
-                    self.reranker_type = "qwen3"
+                    self.reranker_type = "cross_encoder"
                     logger.info(
-                        "Using Qwen3 reranker: %s on device: %s",
+                        "Using CrossEncoder reranker: %s on device: %s",
                         settings.reranker_model,
                         device,
                     )
@@ -323,9 +324,9 @@ class RagService:
 
     async def __aexit__(
         self,
-        exc_type: type,
-        exc_val: Exception,
-        exc_tb: object,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: object | None,
     ) -> None:
         """Async context manager exit with reference counting."""
         if RagService._lock is None:
@@ -411,27 +412,24 @@ class RagService:
         Returns:
             Deterministic UUID string
         """
-        import uuid
-
-        normalized_url = normalize_url(url)
-        id_string = f"{normalized_url}:{chunk_index}"
-        # Generate a deterministic UUID from the hash
-        hash_bytes = hashlib.sha256(id_string.encode()).digest()[:16]
-        # Create UUID from the first 16 bytes of the hash
-        deterministic_uuid = uuid.UUID(bytes=hash_bytes)
-        return str(deterministic_uuid)
+        # Use standardized deduplication service
+        deduplicator = VectorDeduplicationManager(vector_service=None)
+        return deduplicator.generate_deterministic_id(url, chunk_index)
 
     def _calculate_content_hash(self, content: str) -> str:
         """
-        Calculate SHA256 hash of content for change detection.
+        Calculate BLAKE2b hash of content for change detection.
+
+        Uses BLAKE2b-256 which is cryptographically secure and faster than MD5
+        while providing collision resistance suitable for content deduplication.
 
         Args:
             content: Text content to hash
 
         Returns:
-            SHA256 hash hexdigest string
+            BLAKE2b-256 hash hexdigest string
         """
-        return hashlib.sha256(content.encode("utf-8")).hexdigest()
+        return hashlib.blake2b(content.encode("utf-8"), digest_size=32).hexdigest()
 
     # Backwards compatibility helper methods
     def _is_random_uuid(self, chunk_id: str) -> bool:
@@ -457,7 +455,7 @@ class RagService:
         crawl_result: CrawlResult,
         deduplication: bool | None = None,
         force_update: bool = False,
-        progress_callback: Callable[..., None] | None = None,
+        progress_callback: Callable[[int, int, str], None] | None = None,
         seed_url: str | None = None,
         crawl_session_id: str | None = None,
     ) -> dict[str, int]:
@@ -515,7 +513,7 @@ class RagService:
             query.limit,
             query.min_score,
             query.source_filters,
-            rerank,
+            effective_rerank,
             include_content=query.include_content,
             include_metadata=query.include_metadata,
             date_range=date_range_str,
@@ -610,7 +608,7 @@ class RagService:
                 query.limit,
                 query.min_score,
                 query.source_filters,
-                rerank,
+                effective_rerank,
                 result,
                 include_content=query.include_content,
                 include_metadata=query.include_metadata,
@@ -621,7 +619,7 @@ class RagService:
 
         except Exception as e:
             logger.error(f"Error processing RAG query: {e}")
-            raise ToolError(f"RAG query failed: {e!s}") from e
+            raise ServiceError(f"RAG query failed: {e!s}") from e
 
     async def _rerank_results(
         self,
@@ -745,8 +743,10 @@ class RagService:
                 content_words = set(match.document.content.lower().split())
 
                 # Keyword overlap score
-                keyword_overlap = len(query_words.intersection(content_words)) / len(
-                    query_words
+                keyword_overlap = (
+                    len(query_words.intersection(content_words)) / len(query_words)
+                    if len(query_words) > 0
+                    else 0.0
                 )
 
                 # Length penalty (prefer moderate length chunks)
@@ -761,8 +761,10 @@ class RagService:
                 title_bonus = 0.0
                 if match.document.source_title:
                     title_words = set(match.document.source_title.lower().split())
-                    title_overlap = len(query_words.intersection(title_words)) / len(
-                        query_words
+                    title_overlap = (
+                        len(query_words.intersection(title_words)) / len(query_words)
+                        if len(query_words) > 0
+                        else 0.0
                     )
                     title_bonus = title_overlap * 0.1
 

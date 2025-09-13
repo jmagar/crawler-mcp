@@ -10,14 +10,14 @@ This report documents how the current implementation aligns with Crawl4AI’s re
 - `crawler_mcp/crawl_core/batch_utils.py`
 - `crawler_mcp/crawl_core/parallel_engine.py`
 - `crawler_mcp/crawl_core/strategy.py`
-- `crawler_mcp/optimized_config.py`
+
 
 ## Current Implementation Overview
 
 - Strategy: `OptimizedCrawlerStrategy` extends Crawl4AI’s `AsyncCrawlerStrategy` and orchestrates the full pipeline: discovery → parallel crawl (arun_many) → validation → conversion → optional embeddings/Qdrant → reporting.
 - Parallel engine: `ParallelEngine` performs high‑throughput crawling via `AsyncWebCrawler.arun_many`, supports streaming and batch modes, content validation (hash/quality heuristics), optional JS retry, placeholder retry pass, and request interception for resource blocking.
 - Concurrency tuning: `ConcurrencyTuner` adjusts `MemoryAdaptiveDispatcher.max_session_permit` at runtime using `PerformanceMonitor` metrics (CPU, error‑rate).
-- Config: `OptimizedConfig` centralizes discovery, concurrency, extraction, fallback, embeddings (TEI), and Qdrant settings, with env overrides.
+- Settings: `CrawlerSettings` centralizes discovery, concurrency, extraction, embeddings (TEI), and Qdrant settings, with env overrides via environment variables.
 - Batching utils: Greedy length‑aware batching for TEI payload shaping and GPU utilization (`pack_texts_into_batches` et al.).
 
 ## Crawl4AI Patterns: What “Good” Looks Like

@@ -22,10 +22,13 @@ __author__ = "Crawler-MCP Team"
 __description__ = "RAG-enabled web crawling MCP server"
 
 # Main exports - use lazy imports to avoid module conflicts
-from .config import settings
-from .crawl_core.strategy import CrawlOrchestrator
+from .core.strategy import CrawlOrchestrator
+from .settings import get_settings
 
-__all__ = ["CrawlOrchestrator", "get_main", "get_mcp", "settings"]
+# Back-compat: expose a resolved settings instance
+settings = get_settings()
+
+__all__ = ["CrawlOrchestrator", "get_main", "get_mcp", "get_settings", "settings"]
 
 
 # Lazy imports to prevent conflicts when running server module directly

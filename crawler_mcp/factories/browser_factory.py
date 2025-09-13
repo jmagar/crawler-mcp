@@ -1,70 +1,118 @@
 """
-Browser configuration factory for optimized high-performance web crawler.
+Browser configuration factory for the crawler, derived from CrawlerSettings.
 
-This module provides factory methods for creating browser configurations
-using Crawl4AI's documented browser modes.
+This avoids depending on OptimizedConfig and uses the unified settings.
 """
 
-from crawl4ai import BrowserConfig
+from __future__ import annotations
 
-from crawler_mcp.optimized_config import OptimizedConfig
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from crawl4ai import BrowserConfig
+else:
+    from crawl4ai import BrowserConfig as _RuntimeBrowserConfig
+
+    BrowserConfig = _RuntimeBrowserConfig  # type: ignore[assignment]
+
+from crawler_mcp.constants import (
+    MINIMAL_VIEWPORT_HEIGHT,
+    MINIMAL_VIEWPORT_WIDTH,
+    BrowserMode,
+)
+from crawler_mcp.settings import CrawlerSettings
 
 
 class BrowserFactory:
-    """Factory for creating browser configurations using documented Crawl4AI APIs"""
+    """Factory for creating browser configurations using CrawlerSettings."""
 
-    def __init__(self, config: OptimizedConfig = None):
-        """
-        Initialize browser factory.
+    def __init__(
+        self, settings: CrawlerSettings, overrides: dict[str, Any] | None = None
+    ):
+        self.settings = settings
+        self.overrides = overrides or {}
 
-        Args:
-            config: Optional optimized crawler configuration
-        """
-        self.config = config or OptimizedConfig()
+    def _get(self, key: str, default: Any) -> Any:
+        return self.overrides.get(key, getattr(self.settings, key, default))
 
     def create_config(self) -> BrowserConfig:
-        """
-        Create browser configuration based on configured browser_mode.
+        mode = self._get("browser_mode", BrowserMode.HEADLESS)
+        if isinstance(mode, str):
+            # Normalize string values if any
+            try:
+                mode = BrowserMode(mode)
+            except Exception:
+                mode = BrowserMode.HEADLESS
 
-        Returns:
-            BrowserConfig appropriate for the configured mode
-        """
-        if self.config.browser_mode == "text":
+        if mode == BrowserMode.TEXT:
             return self._create_text_config()
-        elif self.config.browser_mode == "minimal":
+        if mode == BrowserMode.MINIMAL:
             return self._create_minimal_config()
-        else:  # full
-            return self._create_full_config()
+        # FULL or HEADLESS fall back to full config, honoring headless flag
+        return self._create_full_config()
 
     def get_recommended_config(self) -> BrowserConfig:
-        """
-        Get recommended browser configuration (alias for create_config).
-
-        Returns:
-            BrowserConfig appropriate for the configured mode
-        """
         return self.create_config()
 
+    def _base_kwargs(self) -> dict[str, Any]:
+        return {
+            "browser_type": self._get("browser_type", "chromium"),
+            "viewport_width": int(self._get("browser_width", MINIMAL_VIEWPORT_WIDTH)),
+            "viewport_height": int(
+                self._get("browser_height", MINIMAL_VIEWPORT_HEIGHT)
+            ),
+            "light_mode": bool(self._get("light_mode", True)),
+            "java_script_enabled": bool(self._get("browser_js_enabled", True)),
+            "extra_args": list(self._get("extra_args", [])),
+        }
+
+    def _get_headless_mode(self) -> bool:
+        """Determine headless mode based on browser_mode setting."""
+        mode = self._get("browser_mode", BrowserMode.HEADLESS)
+        if isinstance(mode, str):
+            try:
+                mode = BrowserMode(mode)
+            except Exception:
+                mode = BrowserMode.HEADLESS
+        # FULL mode is not headless, all others are headless
+        return mode is not BrowserMode.FULL
+
     def _create_full_config(self) -> BrowserConfig:
-        """Create full-featured browser configuration."""
+        # Get the browser mode from settings/overrides
+        mode = self._get("browser_mode", BrowserMode.HEADLESS)
+        if isinstance(mode, str):
+            try:
+                mode = BrowserMode(mode)
+            except Exception:
+                mode = BrowserMode.HEADLESS
+
+        # Set headless to False when mode is FULL, True otherwise
+        headless = False if mode == BrowserMode.FULL else True
         return BrowserConfig(
-            headless=self.config.browser_headless,
-            browser_type="chromium",
+            headless=headless,
+            **self._base_kwargs(),
         )
 
     def _create_text_config(self) -> BrowserConfig:
-        """Create text-only browser configuration."""
-        return BrowserConfig(
-            headless=True,
-            text_mode=True,
-            browser_type="chromium",
+        kwargs = self._base_kwargs()
+        kwargs.update(
+            {
+                "text_mode": True,
+                "java_script_enabled": False,
+            }
         )
+        headless = self._get_headless_mode()
+        return BrowserConfig(headless=headless, **kwargs)
 
     def _create_minimal_config(self) -> BrowserConfig:
-        """Create minimal browser configuration with aggressive resource blocking."""
-        return BrowserConfig(
-            headless=True,
-            text_mode=True,
-            disable_images=True,
-            browser_type="chromium",
+        kwargs = self._base_kwargs()
+        kwargs.update(
+            {
+                "text_mode": True,
+                "java_script_enabled": False,
+                "viewport_width": MINIMAL_VIEWPORT_WIDTH,
+                "viewport_height": MINIMAL_VIEWPORT_HEIGHT,
+            }
         )
+        headless = self._get_headless_mode()
+        return BrowserConfig(headless=headless, **kwargs)

@@ -15,6 +15,7 @@ from qdrant_client.models import (
 )
 
 from ...models.rag import DocumentChunk
+from ..rag.deduplication import generate_point_id
 from .base import BaseVectorService, _parse_timestamp
 
 logger = logging.getLogger(__name__)
@@ -94,9 +95,12 @@ class DocumentOperations(BaseVectorService):
                         )
                         continue
 
+                    # Generate stable 64-bit integer ID for Qdrant
+                    point_id = generate_point_id(doc.source_url, doc.chunk_index)
+
                     # Prepare point data
                     point = PointStruct(
-                        id=doc.id,
+                        id=point_id,
                         vector=doc.embedding,
                         payload={
                             "content": doc.content,
@@ -106,6 +110,7 @@ class DocumentOperations(BaseVectorService):
                             "word_count": doc.word_count,
                             "char_count": doc.char_count,
                             "timestamp": doc.timestamp.isoformat(),
+                            "original_doc_id": doc.id,  # Keep original UUID for reference
                             # Crawl provenance tracking
                             "seed_url": doc.seed_url,
                             "crawl_session_id": doc.crawl_session_id,

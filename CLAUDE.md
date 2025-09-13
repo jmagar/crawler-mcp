@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) for developing this 
 ## FastMCP Framework Knowledge
 - **Primary Transport**: Streamable-HTTP is recommended for most servers.
 - **Package Manager**: `uv` is the standard for this project. Use `pyproject.toml` to manage dependencies.
-- **Core Dependencies**: Key libraries include `fastmcp`, `crawl4ai`, `qdrant-client`, `pydantic`, `httpx`, `transformers`, and `sentence-transformers`. Optional: `tiktoken` (fallback tokenizer).
+- **Core Dependencies**: Key libraries include `fastmcp`, `crawl4ai`, `cssselect`, `qdrant-client`, `pydantic`, `httpx`, `transformers`, and `sentence-transformers`. Optional: `tiktoken` (fallback tokenizer).
 
 ## Development Guidelines
 
@@ -23,7 +23,7 @@ crawler_mcp/
 ├── docker-compose.yml        # Qdrant and HF TEI services
 ├── crawler_mcp/              # Main application package
 │   ├── __init__.py
-│   ├── config.py           # Pydantic settings management
+│   ├── settings.py         # Pydantic settings management (single source of truth)
 │   ├── server.py           # Main server entry point
 │   ├── prompts/            # Reusable crawling and analysis prompt templates
 │   │   └── __init__.py
@@ -32,8 +32,6 @@ crawler_mcp/
 │   ├── models/             # Pydantic data models
 │   │   └── __init__.py
 │   ├── core/               # Core services (embeddings, vectors, rag, sources)
-│   │   └── __init__.py
-│   ├── crawlers/           # Crawler implementations (web, repository, directory)
 │   │   └── __init__.py
 │   └── tools/              # MCP tool implementations (scrape, crawl, rag_query, etc.)
 │       └── __init__.py
@@ -49,34 +47,36 @@ crawler_mcp/
 - Always commit the `uv.lock` file to source control to ensure reproducible builds.
 
 ### Configuration Management
-- Use Pydantic's `BaseSettings` in a `config.py` file to manage settings.
-- Load configuration from environment variables and `.env` files for flexibility across different environments.
+- Use Pydantic's `BaseSettings` in `settings.py` to manage all configuration.
+- Load from environment variables and `.env` files; prefer canonical env names like `MAX_PAGES`.
 
 ### Development Workflow with `fastmcp` CLI
 Use the built-in `fastmcp` command-line interface for an efficient development cycle.
 
 #### Interactive Debugging (`fastmcp dev`)
+
 For interactive testing and debugging, use the `dev` command. This runs your server with the MCP Inspector UI, which allows you to call tools and inspect responses.
 
-- **Start the dev server**: `fastmcp dev crawler_mcp/crawlers/optimized/server.py --with crawl4ai --with qdrant-client --with torch`
+- **Start the dev server**: `fastmcp dev crawler_mcp/server.py --with crawl4ai --with qdrant-client --with torch`
 
 #### Running the Server (`fastmcp run`)
+
 To run the server directly (e.g., for integration testing or production), use the `run` command.
 
-- **Run with HTTP transport**: `fastmcp run crawler_mcp/crawlers/optimized/server.py --transport http`
-- **Run with dependencies**: `fastmcp run crawler_mcp/crawlers/optimized/server.py --with crawl4ai --with qdrant-client`
+- **Run with HTTP transport**: `fastmcp run crawler_mcp/server.py --transport http`
+- **Run with dependencies**: `fastmcp run crawler_mcp/server.py --with crawl4ai --with qdrant-client`
 
 ## Installation & Deployment
 Once your server is ready, use the `fastmcp install` command to make it available to MCP clients.
 
-- **For supported clients**: Use `fastmcp install <client_name> crawler_mcp/crawlers/optimized/server.py` (e.g., `claude-code`, `claude-desktop`). This handles dependency management with `uv` automatically.
-- **For other clients**: Generate a standard configuration file using `fastmcp install mcp-json crawler_mcp/crawlers/optimized/server.py > mcp_config.json`. This file can be used with any MCP-compatible client.
+- **For supported clients**: Use `fastmcp install <client_name> crawler_mcp/server.py` (e.g., `claude-code`, `claude-desktop`). This handles dependency management with `uv` automatically.
+- **For other clients**: Generate a standard configuration file using `fastmcp install mcp-json crawler_mcp/server.py > mcp_config.json`. This file can be used with any MCP-compatible client.
 
 ## FastMCP Specific Patterns
 
 - **Component Decorators**: Use `@mcp.tool`, `@mcp.resource("uri://path")`, and `@mcp.prompt` to define your server's capabilities.
 
-- **Separation of Concerns**: Keep core business logic in the `core/` directory and crawler implementations in `crawlers/`. The MCP tool function should be a thin wrapper that handles context logging and calls the business logic. This makes the code more testable and reusable.
+- **Separation of Concerns**: Keep core business logic in the `core/` directory (including crawler orchestration). The MCP tool function should be a thin wrapper that handles context logging and calls the business logic. This makes the code more testable and reusable.
 
 - **Middleware**: Use middleware to add cross-cutting concerns. For development, new servers should include `ErrorHandlingMiddleware`, `LoggingMiddleware`, and `TimingMiddleware` by default. Add them using `mcp.add_middleware()`.
 
